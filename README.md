@@ -21,9 +21,9 @@
   <img alt="100% local" src="https://img.shields.io/badge/privacy-100%25%20local-2ea44f" />
 </p>
 
-<!-- Screenshot: save it as docs/screenshot.png, then replace this comment with:
-<p align="center"><img src="docs/screenshot.png" width="860" alt="Glimpse finding a network diagram" /></p>
--->
+<p align="center">
+  <img src="docs/screenshot.png" width="860" alt="Glimpse searching for &quot;glimpse in:glimpse&quot;: a grid of matching screenshots, the selected one previewed with every occurrence of the word Glimpse outlined" />
+</p>
 
 You took a screenshot of that error message, that network diagram, that receipt. You remember what was
 in it, not what it was called or when. Glimpse reads every image in your folders, so you can just type
