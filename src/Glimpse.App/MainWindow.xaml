@@ -25,6 +25,8 @@
             <KeyboardAccelerator Modifiers="Control" Key="C" Invoked="OnCopyImage" />
             <KeyboardAccelerator Modifiers="Control,Shift" Key="C" Invoked="OnCopyPath" />
             <KeyboardAccelerator Modifiers="Control" Key="E" Invoked="OnReveal" />
+            <KeyboardAccelerator Modifiers="Control" Key="M" Invoked="OnMoreLikeThis" />
+            <KeyboardAccelerator Modifiers="Control" Key="T" Invoked="OnToggleVisual" />
             <KeyboardAccelerator Modifiers="Control" Key="Q" Invoked="OnQuit" />
         </Grid.KeyboardAccelerators>
 
@@ -41,13 +43,22 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBox x:Name="SearchBox"
-                     PlaceholderText="Search text in your screenshots…   in:notes   after:2026-05"
+                     PlaceholderText="Text you remember, or describe what it looks like…   in:notes   after:2026-05"
                      FontSize="20" Padding="14,10"
                      TextChanged="OnSearchChanged"
                      KeyDown="OnSearchKeyDown" />
-            <TextBlock x:Name="CountText" Grid.Column="1" VerticalAlignment="Center"
+            <ToggleButton x:Name="VisualOnly" Grid.Column="1" VerticalAlignment="Stretch" Padding="12,0"
+                          ToolTipService.ToolTip="Visual only: match by what images look like (Ctrl+T)"
+                          Click="OnVisualOnlyToggled">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE7B3;" FontSize="16" />
+                    <TextBlock Text="Visual" />
+                </StackPanel>
+            </ToggleButton>
+            <TextBlock x:Name="CountText" Grid.Column="2" VerticalAlignment="Center"
                        Style="{StaticResource CaptionTextBlockStyle}"
                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
         </Grid>
@@ -75,6 +86,8 @@
                                 <Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="UniformToFill"
                                        HorizontalAlignment="Center" VerticalAlignment="Top" />
                             </Border>
+                            <TextBlock Text="{x:Bind Badge}" Visibility="{x:Bind BadgeVisibility}" FontSize="11"
+                                       FontWeight="SemiBold" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
                             <TextBlock local:Highlight.Text="{x:Bind Snippet}"
                                        Style="{StaticResource CaptionTextBlockStyle}"
                                        TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
@@ -123,7 +136,7 @@
                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
             <TextBlock HorizontalAlignment="Right" Style="{StaticResource CaptionTextBlockStyle}"
                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                       Text="Enter open · Ctrl+C copy image · Ctrl+Shift+C copy path · Ctrl+E show in folder · Esc hide" />
+                       Text="Enter open · Ctrl+C copy image · Ctrl+M more like this · Ctrl+E show in folder · Esc hide" />
         </Grid>
     </Grid>
 </Window>

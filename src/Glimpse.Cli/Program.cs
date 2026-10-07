@@ -1,6 +1,7 @@
 using Glimpse.Core;
 using Glimpse.Core.Index;
 using Glimpse.Core.Ocr;
+using Glimpse.Core.Visual;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
 
@@ -12,6 +13,8 @@ try
     return command switch
     {
         "index" => await Index(rest),
+        "embed" => await Embed(),
+        "tokens" => Tokens(string.Join(' ', rest)), // debug: CLIP token ids
         "search" or "s" => Search(string.Join(' ', rest)),
         "ocr" => await Ocr(rest),
         "stats" => Stats(),
@@ -68,8 +71,10 @@ static async Task<int> Index(string[] args)
 
 static int Search(string query)
 {
+    var config = GlimpseConfig.Load();
     using var index = new ImageIndex();
-    var hits = index.Search(query, limit: 20);
+    using var clip = OpenClip(config);
+    var hits = new SearchEngine(index, clip).Search(query, limit: 20);
     if (hits.Count == 0)
     {
         Console.WriteLine("no matches");
@@ -81,7 +86,54 @@ static int Search(string query)
         var snippet = h.Snippet.ReplaceLineEndings(" ")
             .Replace(ImageIndex.MatchStart.ToString(), "\x1b[30;43m")
             .Replace(ImageIndex.MatchEnd.ToString(), "\x1b[0m");
-        Console.WriteLine($"  \x1b[2m{h.Source} · {h.Modified:yyyy-MM-dd HH:mm}\x1b[0m  {snippet}");
+        var kind = h.VisualScore is float score ? $"\x1b[36m≈ {score:F3}\x1b[0m " : "";
+        Console.WriteLine($"  {kind}\x1b[2m{h.Source} · {h.Modified:yyyy-MM-dd HH:mm}\x1b[0m  {snippet}");
+    }
+    return 0;
+}
+
+static int Tokens(string text)
+{
+    var dir = GlimpseConfig.Load().VisualModelPath!;
+    var ids = new ClipTokenizer(Path.Combine(dir, "vocab.json"), Path.Combine(dir, "merges.txt")).Encode(text);
+    Console.WriteLine(string.Join(", ", ids.TakeWhile((id, i) => i == 0 || ids[i - 1] != 49407)));
+    return 0;
+}
+
+static ClipModel? OpenClip(GlimpseConfig config) =>
+    config.VisualModelPath is { } dir && ClipModel.IsInstalled(dir) ? new ClipModel(dir, config.UseGpu) : null;
+
+static async Task<int> Embed()
+{
+    var config = GlimpseConfig.Load();
+    using var clip = OpenClip(config);
+    if (clip is null)
+    {
+        Console.Error.WriteLine($"no CLIP model in {config.VisualModelPath} — visual search is off");
+        return 1;
+    }
+
+    using var index = new ImageIndex();
+    using var cts = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+
+    var lastDraw = DateTime.MinValue;
+    var progress = new Progress<IndexProgress>(p =>
+    {
+        if ((DateTime.Now - lastDraw).TotalMilliseconds < 250 && p.Done < p.Total) return;
+        lastDraw = DateTime.Now;
+        Console.Write($"\r  embed {p.Done}/{p.Total} ({100.0 * p.Done / p.Total:F0}%) on {clip.VisionDevice}   ");
+    });
+
+    try
+    {
+        var r = await new EmbeddingIndexer(config, index, clip).RunAsync(progress, cts.Token);
+        Console.WriteLine();
+        Console.WriteLine($"embedded {r.Embedded}, failed {r.Failed} in {r.Elapsed:mm\\:ss} on {clip.VisionDevice}");
+    }
+    catch (OperationCanceledException)
+    {
+        Console.WriteLine("\ncancelled — progress so far is saved; run again to continue.");
     }
     return 0;
 }
@@ -120,7 +172,8 @@ static int Help()
         glimpse — find images by the text in them
 
           glimpse index [source...]    scan sources and OCR new/changed images
-          glimpse search <query>       e.g.  moca network   ·   in:notes after:2026-05 invoice
+          glimpse embed                CLIP-embed images for visual search (after index)
+          glimpse search <query>       e.g.  moca network  ·  ~network diagram  ·  in:notes after:2026-05 invoice  ·  like:1234
           glimpse ocr <file>           OCR a single image and print the text
           glimpse stats                index size and per-source counts
           glimpse sources              list configured folders

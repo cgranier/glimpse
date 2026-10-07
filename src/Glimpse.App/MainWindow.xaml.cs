@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Glimpse.Core;
 using Glimpse.Core.Index;
+using Glimpse.Core.Visual;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
@@ -28,6 +29,9 @@ public sealed partial class MainWindow : Window
     readonly ImageIndex _writeIndex = new();
     readonly Indexer _indexer;
     readonly FolderWatcher _watcher;
+    readonly ClipModel? _clip;              // null when the visual model isn't installed
+    readonly EmbeddingIndexer? _embedder;
+    readonly SearchEngine _engine;
     readonly GlobalHotkey _hotkey;
     readonly TrayIcon _tray;
     bool _quitting;
@@ -58,11 +62,20 @@ public sealed partial class MainWindow : Window
         _searchDebounce.IsRepeating = false;
         _searchDebounce.Tick += (_, _) => _ = RunSearchAsync(SearchBox.Text);
 
+        if (_config.VisualModelPath is { } modelDir && ClipModel.IsInstalled(modelDir))
+        {
+            _clip = new ClipModel(modelDir, _config.UseGpu);
+            _embedder = new EmbeddingIndexer(_config, _writeIndex, _clip);
+        }
+        _engine = new SearchEngine(_searchIndex, _clip);
+        if (_clip is null) VisualOnly.Visibility = Visibility.Collapsed;
+
         _indexer = new Indexer(_config, _writeIndex);
         _watcher = new FolderWatcher(_config, _indexer);
-        _watcher.Indexed += n => DispatcherQueue.TryEnqueue(() =>
+        _watcher.Indexed += n => DispatcherQueue.TryEnqueue(async () =>
         {
             SetIndexStatus($"indexed {n} new image{(n == 1 ? "" : "s")}");
+            await EmbedNewAsync();
             _ = RunSearchAsync(SearchBox.Text);
         });
 
@@ -145,6 +158,7 @@ public sealed partial class MainWindow : Window
         _watcher.Dispose();
         _searchIndex.Dispose();
         _writeIndex.Dispose();
+        _clip?.Dispose();
     }
 
     // ---- indexing -------------------------------------------------------------------------
@@ -158,7 +172,8 @@ public sealed partial class MainWindow : Window
         {
             var report = await Task.Run(() => _indexer.RunAsync(progress: progress));
             SetIndexStatus(report.Indexed > 0 ? $"indexed {report.Indexed} new" : "up to date");
-            if (report.Indexed > 0 || report.Removed > 0) _ = RunSearchAsync(SearchBox.Text);
+            var embedded = await EmbedNewAsync();
+            if (report.Indexed > 0 || report.Removed > 0 || embedded > 0) _ = RunSearchAsync(SearchBox.Text);
         }
         catch (Exception ex)
         {
@@ -170,11 +185,35 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>Visual pass: CLIP-embed anything the text pass added. Returns how many were embedded.</summary>
+    async Task<int> EmbedNewAsync()
+    {
+        if (_embedder is null) return 0;
+        var progress = new Progress<IndexProgress>(p => SetIndexStatus($"visual indexing {p.Done}/{p.Total}"));
+        try
+        {
+            var report = await Task.Run(() => _embedder.RunAsync(progress));
+            if (report.Embedded + report.Failed > 0)
+            {
+                _engine.InvalidateVisual();
+                SetIndexStatus($"up to date · visual on {_clip!.VisionDevice}");
+            }
+            return report.Embedded;
+        }
+        catch (Exception ex)
+        {
+            App.Log(ex);
+            SetIndexStatus("visual indexing failed: " + ex.Message);
+            return 0;
+        }
+    }
+
     void SetIndexStatus(string status)
     {
         _indexStatus = status;
         var stats = _searchIndex.GetStats(); // a few COUNT(*)s — cheap enough for the UI thread
-        StatusText.Text = $"{stats.Images:N0} images · {stats.WithText:N0} with text · {_indexStatus}" +
+        var visual = _clip is null ? "visual off" : $"{stats.Embedded:N0} visual";
+        StatusText.Text = $"{stats.Images:N0} images · {stats.WithText:N0} with text · {visual} · {_indexStatus}" +
                           (_hotkey.IsRegistered ? $" · {_config.Hotkey} to summon" : $" · hotkey {_config.Hotkey} unavailable");
         _tray.Tooltip = $"Glimpse — {stats.Images:N0} images · {_indexStatus}";
     }
@@ -194,7 +233,8 @@ public sealed partial class MainWindow : Window
         List<SearchHit> hits;
         try
         {
-            hits = await Task.Run(() => _searchIndex.Search(query, limit: 120));
+            var effective = VisualOnly.IsChecked == true && !query.TrimStart().StartsWith('~') ? "~" + query : query;
+            hits = await Task.Run(() => _engine.Search(effective, limit: 120));
         }
         catch (Exception ex)
         {
@@ -357,6 +397,25 @@ public sealed partial class MainWindow : Window
         Clipboard.SetContent(data);
         Clipboard.Flush();
         CountText.Text = "image copied";
+    }
+
+    void OnVisualOnlyToggled(object sender, RoutedEventArgs e) => _ = RunSearchAsync(SearchBox.Text);
+
+    void OnToggleVisual(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        if (_clip is null) return;
+        VisualOnly.IsChecked = VisualOnly.IsChecked != true;
+        _ = RunSearchAsync(SearchBox.Text);
+    }
+
+    void OnMoreLikeThis(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        if (_clip is null || Selected is not { } item) return;
+        SearchBox.Text = $"like:{item.Hit.Id}";
+        SearchBox.Focus(FocusState.Programmatic);
+        SearchBox.SelectionStart = SearchBox.Text.Length;
     }
 
     void OnCopyPath(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)

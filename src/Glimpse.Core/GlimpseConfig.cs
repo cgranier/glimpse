@@ -24,6 +24,15 @@ public sealed class GlimpseConfig
     /// </summary>
     public bool HydrateCloudFiles { get; set; } = false;
 
+    /// <summary>Folder name under models\ holding the CLIP ONNX files. Empty disables visual search.</summary>
+    public string VisualModel { get; set; } = "clip-vit-b16";
+
+    /// <summary>Run the image encoder on the GPU (DirectML). Falls back to CPU automatically.</summary>
+    public bool UseGpu { get; set; } = true;
+
+    [JsonIgnore]
+    public string? VisualModelPath => string.IsNullOrWhiteSpace(VisualModel) ? null : System.IO.Path.Combine(DataDir, "models", VisualModel);
+
     /// <summary>Concurrent OCR workers. Windows OCR is CPU-bound; half the cores keeps the machine responsive.</summary>
     public int Workers { get; set; } = Math.Max(1, Environment.ProcessorCount / 2);
 

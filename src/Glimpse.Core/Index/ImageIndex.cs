@@ -19,9 +19,18 @@ public sealed record SearchHit(
     int Width,
     int Height,
     /// <summary>Snippet with matches wrapped in <see cref="ImageIndex.MatchStart"/>/<see cref="ImageIndex.MatchEnd"/>.</summary>
-    string Snippet);
+    string Snippet,
+    /// <summary>Cosine similarity for visual matches; null for text matches.</summary>
+    float? VisualScore = null);
 
-public sealed record IndexStats(int Images, int WithText, int Errors, IReadOnlyDictionary<string, int> BySource);
+public sealed record IndexStats(int Images, int WithText, int Errors, IReadOnlyDictionary<string, int> BySource, int Embedded = 0);
+
+/// <summary>All embeddings for one model, plus the metadata visual search filters on.</summary>
+public sealed record EmbeddingSet(long[] Ids, string[] Sources, long[] Mtimes, float[] Vectors, int Dim)
+{
+    public int Count => Ids.Length;
+    public ReadOnlySpan<float> Vector(int i) => Vectors.AsSpan(i * Dim, Dim);
+}
 
 /// <summary>
 /// SQLite store. `images` holds file metadata + OCR word boxes; `images_fts` is an FTS5 table
@@ -32,7 +41,7 @@ public sealed class ImageIndex : IDisposable
     public const char MatchStart = '\u0001';
     public const char MatchEnd = '\u0002';
 
-    const int SchemaVersion = 1;
+    const int SchemaVersion = 2;
     const int SQLITE_CORRUPT = 11, SQLITE_NOTADB = 26;
 
     // A SqliteConnection must never be used by two threads at once (the app's startup scan and folder
@@ -105,6 +114,13 @@ public sealed class ImageIndex : IDisposable
 
             -- rowid = images.id. `name` lets file names match too.
             CREATE VIRTUAL TABLE IF NOT EXISTS images_fts USING fts5(text, name, tokenize = 'trigram');
+
+            -- v2: CLIP image embeddings (float32, unit length). An empty vec marks "couldn't embed".
+            CREATE TABLE IF NOT EXISTS embeddings (
+                image_id    INTEGER PRIMARY KEY,
+                model       TEXT NOT NULL,
+                vec         BLOB NOT NULL
+            );
             """);
         Exec(db, $"PRAGMA user_version = {SchemaVersion}");
     }
@@ -130,7 +146,7 @@ public sealed class ImageIndex : IDisposable
             foreach (var id in ids)
             {
                 using var cmd = _db.CreateCommand();
-                cmd.CommandText = "DELETE FROM images_fts WHERE rowid = $id; DELETE FROM images WHERE id = $id;";
+                cmd.CommandText = "DELETE FROM images_fts WHERE rowid = $id; DELETE FROM embeddings WHERE image_id = $id; DELETE FROM images WHERE id = $id;";
                 cmd.Parameters.AddWithValue("$id", id);
                 cmd.ExecuteNonQuery();
             }
@@ -163,7 +179,9 @@ public sealed class ImageIndex : IDisposable
         var id = (long)cmd.ExecuteScalar()!;
 
         using var fts = _db.CreateCommand();
+        // The file changed (or is new), so any embedding is stale too.
         fts.CommandText = """
+            DELETE FROM embeddings WHERE image_id = $id;
             DELETE FROM images_fts WHERE rowid = $id;
             INSERT INTO images_fts (rowid, text, name) VALUES ($id, $text, $name);
             """;
@@ -204,14 +222,15 @@ public sealed class ImageIndex : IDisposable
     /// <c>in:source</c> (prefix match on source name), <c>after:2026-05</c>, <c>before:2026-06-15</c>.
     /// An empty query returns the most recent images.
     /// </summary>
-    public List<SearchHit> Search(string query, int limit = 60)
+    public List<SearchHit> Search(string query, int limit = 60) => Search(SearchQuery.Parse(query), limit);
+
+    public List<SearchHit> Search(SearchQuery query, int limit = 60)
     {
         lock (_gate) return SearchCore(query, limit);
     }
 
-    List<SearchHit> SearchCore(string query, int limit)
+    List<SearchHit> SearchCore(SearchQuery q, int limit)
     {
-        var q = SearchQuery.Parse(query);
         var where = new List<string>();
         var cmd = _db.CreateCommand();
 
@@ -275,6 +294,105 @@ public sealed class ImageIndex : IDisposable
         return hits;
     }
 
+    // ---- embeddings -----------------------------------------------------------------------
+
+    /// <summary>Images that decoded fine for OCR but have no embedding from <paramref name="model"/> yet, newest first.</summary>
+    public List<(long Id, string Path)> GetImagesMissingEmbedding(string model)
+    {
+        lock (_gate)
+        {
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = """
+                SELECT images.id, images.path FROM images
+                LEFT JOIN embeddings ON embeddings.image_id = images.id AND embeddings.model = $model
+                WHERE embeddings.image_id IS NULL AND images.status = 'ok'
+                ORDER BY images.mtime DESC
+                """;
+            cmd.Parameters.AddWithValue("$model", model);
+            using var r = cmd.ExecuteReader();
+            var result = new List<(long, string)>();
+            while (r.Read()) result.Add((r.GetInt64(0), r.GetString(1)));
+            return result;
+        }
+    }
+
+    /// <summary>Stores embeddings; a null vector records a failed attempt so it isn't retried every run.</summary>
+    public void SaveEmbeddings(string model, IEnumerable<(long Id, float[]? Vector)> items)
+    {
+        lock (_gate)
+        {
+            using var tx = _db.BeginTransaction();
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = "INSERT OR REPLACE INTO embeddings (image_id, model, vec) VALUES ($id, $model, $vec)";
+            var id = cmd.Parameters.Add("$id", SqliteType.Integer);
+            cmd.Parameters.AddWithValue("$model", model);
+            var vec = cmd.Parameters.Add("$vec", SqliteType.Blob);
+            foreach (var (imageId, vector) in items)
+            {
+                id.Value = imageId;
+                vec.Value = vector is null ? Array.Empty<byte>() : System.Runtime.InteropServices.MemoryMarshal.AsBytes(vector.AsSpan()).ToArray();
+                cmd.ExecuteNonQuery();
+            }
+            tx.Commit();
+        }
+    }
+
+    public EmbeddingSet LoadEmbeddings(string model)
+    {
+        lock (_gate)
+        {
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = """
+                SELECT images.id, images.source, images.mtime, embeddings.vec FROM embeddings
+                JOIN images ON images.id = embeddings.image_id
+                WHERE embeddings.model = $model AND length(embeddings.vec) > 0
+                """;
+            cmd.Parameters.AddWithValue("$model", model);
+            using var r = cmd.ExecuteReader();
+
+            var ids = new List<long>();
+            var sources = new List<string>();
+            var mtimes = new List<long>();
+            var vectors = new List<float>();
+            var dim = 0;
+            while (r.Read())
+            {
+                var bytes = (byte[])r.GetValue(3);
+                var v = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(bytes);
+                if (dim == 0) dim = v.Length;
+                if (v.Length != dim) continue;
+                ids.Add(r.GetInt64(0));
+                sources.Add(r.GetString(1));
+                mtimes.Add(r.GetInt64(2));
+                vectors.AddRange(v.ToArray());
+            }
+            return new EmbeddingSet([.. ids], [.. sources], [.. mtimes], [.. vectors], dim);
+        }
+    }
+
+    /// <summary>Hits for the given image ids, in the given order (used to materialize visual results).</summary>
+    public List<SearchHit> GetHits(IReadOnlyList<(long Id, float Score)> ranked)
+    {
+        if (ranked.Count == 0) return [];
+        lock (_gate)
+        {
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = $"""
+                SELECT images.id, images.path, images.source, images.mtime, images.width, images.height,
+                       substr(images_fts.text, 1, 160)
+                FROM images JOIN images_fts ON images_fts.rowid = images.id
+                WHERE images.id IN ({string.Join(',', ranked.Select(r => r.Id))})
+                """;
+            using var r = cmd.ExecuteReader();
+            var byId = new Dictionary<long, SearchHit>();
+            while (r.Read())
+                byId[r.GetInt64(0)] = new SearchHit(r.GetInt64(0), r.GetString(1), r.GetString(2),
+                    new DateTime(r.GetInt64(3), DateTimeKind.Utc).ToLocalTime(),
+                    r.GetInt32(4), r.GetInt32(5), r.IsDBNull(6) ? "" : r.GetString(6));
+            return ranked.Where(x => byId.ContainsKey(x.Id)).Select(x => byId[x.Id] with { VisualScore = x.Score }).ToList();
+        }
+    }
+
     public IndexStats GetStats()
     {
         lock (_gate)
@@ -290,7 +408,8 @@ public sealed class ImageIndex : IDisposable
                 Convert.ToInt32(Scalar(_db, "SELECT count(*) FROM images")),
                 Convert.ToInt32(Scalar(_db, "SELECT count(*) FROM images_fts WHERE length(text) > 0")),
                 Convert.ToInt32(Scalar(_db, "SELECT count(*) FROM images WHERE status = 'error'")),
-                bySource);
+                bySource,
+                Convert.ToInt32(Scalar(_db, "SELECT count(*) FROM embeddings WHERE length(vec) > 0")));
         }
     }
 
@@ -318,13 +437,14 @@ public sealed class ImageIndex : IDisposable
 }
 
 /// <summary>Parsed form of the search box text.</summary>
-public sealed record SearchQuery(List<string> Terms, string? Source, DateTime? After, DateTime? Before)
+public sealed record SearchQuery(List<string> Terms, string? Source, DateTime? After, DateTime? Before, long? Like = null)
 {
     public static SearchQuery Parse(string text)
     {
         var terms = new List<string>();
         string? source = null;
         DateTime? after = null, before = null;
+        long? like = null;
 
         foreach (var token in Tokenize(text))
         {
@@ -334,10 +454,12 @@ public sealed record SearchQuery(List<string> Terms, string? Source, DateTime? A
                 after = a;
             else if (token.StartsWith("before:", StringComparison.OrdinalIgnoreCase) && TryDate(token[7..], out var b, out _))
                 before = b;
+            else if (token.StartsWith("like:", StringComparison.OrdinalIgnoreCase) && long.TryParse(token[5..].TrimStart('#'), out var id))
+                like = id;
             else
                 terms.Add(token);
         }
-        return new SearchQuery(terms, source, after, before);
+        return new SearchQuery(terms, source, after, before, like);
     }
 
     /// <summary>Whitespace split, honoring "quoted phrases".</summary>
