@@ -13,7 +13,6 @@ public sealed class ResultItem(SearchHit hit) : INotifyPropertyChanged
 
     /// <summary>Marks visual matches, which may not contain any of the typed words.</summary>
     public string Badge { get; } = hit.VisualScore is float s ? $"≈ looks like  ·  {s:F2}" : "";
-    public Microsoft.UI.Xaml.Visibility BadgeVisibility => Badge.Length > 0 ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
 
     BitmapImage? _thumbnail;
     public BitmapImage? Thumbnail
