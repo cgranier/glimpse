@@ -29,6 +29,9 @@ public sealed partial class MainWindow : Window
     readonly Indexer _indexer;
     readonly FolderWatcher _watcher;
     readonly GlobalHotkey _hotkey;
+    readonly TrayIcon _tray;
+    bool _quitting;
+    bool _indexing;
 
     readonly ObservableCollection<ResultItem> _items = [];
     readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _searchDebounce;
@@ -67,7 +70,19 @@ public sealed partial class MainWindow : Window
         _hotkey = new GlobalHotkey(hwnd, _config.Hotkey);
         _hotkey.Pressed += () => DispatcherQueue.TryEnqueue(Summon);
 
-        AppWindow.Closing += (_, _) => Shutdown();
+        _tray = new TrayIcon(hwnd, icon, "Glimpse");
+        _tray.Clicked += Summon;
+        _tray.BuildMenu = BuildTrayMenu;
+        _tray.Message += msg => { if (msg == App.SummonMessage) Show(); };
+
+        // The X button tucks the window into the tray; Quit (tray menu / Ctrl+Q) really exits.
+        AppWindow.Closing += (_, e) =>
+        {
+            if (_quitting) return;
+            e.Cancel = true;
+            AppWindow.Hide();
+        };
+        Closed += (_, _) => Shutdown();
         Activated += (_, e) =>
         {
             if (e.WindowActivationState != WindowActivationState.Deactivated) SearchBox.Focus(FocusState.Programmatic);
@@ -81,13 +96,15 @@ public sealed partial class MainWindow : Window
 
     public void StartHidden() => AppWindow.Hide();
 
+    /// <summary>Hotkey / tray click: toggle.</summary>
     void Summon()
     {
-        if (AppWindow.IsVisible && IsForeground())
-        {
-            AppWindow.Hide();
-            return;
-        }
+        if (AppWindow.IsVisible && IsForeground()) AppWindow.Hide();
+        else Show();
+    }
+
+    void Show()
+    {
         AppWindow.Show();
         Activate();
         SetForegroundWindow(WindowNative.GetWindowHandle(this));
@@ -103,8 +120,27 @@ public sealed partial class MainWindow : Window
         AppWindow.MoveAndResize(new(area.X + (area.Width - w) / 2, area.Y + (area.Height - h) / 2, w, h));
     }
 
+    void Quit()
+    {
+        _quitting = true;
+        Close();
+    }
+
+    IReadOnlyList<TrayMenuItem> BuildTrayMenu() =>
+    [
+        new($"Open Glimpse\t{_config.Hotkey}", Show, IsDefault: true),
+        new(_indexing ? "Indexing…" : "Re-index now", () => { if (!_indexing) _ = CatchUpIndexAsync(); }),
+        TrayMenuItem.Separator,
+        new(AutoStart.PointsElsewhere ? "Start with Windows (another copy)" : "Start with Windows",
+            () => AutoStart.Set(!AutoStart.IsEnabled || AutoStart.PointsElsewhere), Checked: AutoStart.IsEnabled),
+        new("Open config folder", () => Process.Start("explorer.exe", $"\"{GlimpseConfig.DataDir}\"")),
+        TrayMenuItem.Separator,
+        new("Quit", Quit),
+    ];
+
     void Shutdown()
     {
+        _tray.Dispose();
         _hotkey.Dispose();
         _watcher.Dispose();
         _searchIndex.Dispose();
@@ -115,6 +151,7 @@ public sealed partial class MainWindow : Window
 
     async Task CatchUpIndexAsync()
     {
+        _indexing = true;
         var progress = new Progress<IndexProgress>(p =>
             SetIndexStatus(p.Total == 0 ? p.Phase + "…" : $"indexing {p.Done}/{p.Total}"));
         try
@@ -127,6 +164,10 @@ public sealed partial class MainWindow : Window
         {
             SetIndexStatus("indexing failed: " + ex.Message);
         }
+        finally
+        {
+            _indexing = false;
+        }
     }
 
     void SetIndexStatus(string status)
@@ -135,6 +176,7 @@ public sealed partial class MainWindow : Window
         var stats = _searchIndex.GetStats(); // a few COUNT(*)s — cheap enough for the UI thread
         StatusText.Text = $"{stats.Images:N0} images · {stats.WithText:N0} with text · {_indexStatus}" +
                           (_hotkey.IsRegistered ? $" · {_config.Hotkey} to summon" : $" · hotkey {_config.Hotkey} unavailable");
+        _tray.Tooltip = $"Glimpse — {stats.Images:N0} images · {_indexStatus}";
     }
 
     // ---- search ---------------------------------------------------------------------------
@@ -339,11 +381,10 @@ public sealed partial class MainWindow : Window
     {
         args.Handled = true;
         if (SearchBox.Text.Length > 0 && SearchBox.FocusState != FocusState.Unfocused) SearchBox.Text = "";
-        else if (_hotkey.IsRegistered) AppWindow.Hide(); // stays resident; the hotkey brings it back
-        else Close();
+        else AppWindow.Hide(); // stays resident in the tray; hotkey or tray click brings it back
     }
 
-    void OnQuit(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args) => Close();
+    void OnQuit(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args) => Quit();
 
     bool IsForeground() => GetForegroundWindow() == WindowNative.GetWindowHandle(this);
 

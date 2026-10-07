@@ -16,6 +16,9 @@
     <!-- Unpackaged: a plain .exe, no MSIX install step. Self-contained WinAppSDK so nothing else to install. -->
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <!-- Without this, `dotnet publish` of an unpackaged app drops Glimpse.pri and the .xbf files,
+         and the window fails with "XAML parsing failed" at startup. -->
+    <EnableMsixTooling>true</EnableMsixTooling>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

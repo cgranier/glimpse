@@ -15,7 +15,19 @@ src/Glimpse.Cli    `glimpse` command: index / search / ocr / stats / sources
 src/Glimpse.App    WinUI 3 search window (unpackaged, Mica, global hotkey)
 ```
 
-## Run
+## Install
+
+```powershell
+pwsh scripts/install.ps1                # Release build → %LOCALAPPDATA%\Programs\Glimpse, start with Windows, launch in tray
+pwsh scripts/install.ps1 -NoAutoStart   # same, without the login entry
+```
+
+Re-run to update. Glimpse lives in the tray: left-click toggles the window, right-click for
+Re-index now / Start with Windows / Open config folder / Quit. The X button hides to the tray.
+Launching it again just brings up the running copy. Windows 11 puts new tray icons in the ^ overflow;
+drag it onto the taskbar to keep it visible.
+
+## Develop
 
 ```powershell
 dotnet build src/Glimpse.App
@@ -40,7 +52,7 @@ The app indexes on startup (only new/changed files) and then watches the folders
 
 ## Keys
 
-Enter open · Ctrl+C copy image · Ctrl+Shift+C copy path · Ctrl+E show in folder · Esc clear / hide · Ctrl+Q quit
+Win+Alt+S toggle · Enter open · Ctrl+C copy image · Ctrl+Shift+C copy path · Ctrl+E show in folder · Esc clear / hide · Ctrl+Q quit
 
 ## Config
 
@@ -56,7 +68,7 @@ Index lives next to it in `index.db` (about 45 MB for 8k images).
 ## Roadmap
 
 - [ ] Visual search (CLIP embeddings via ONNX) — "network diagram", "dark dashboard"
-- [ ] Tray icon + start with Windows
+- [x] Tray icon + start with Windows
 - [ ] Command Palette extension (`ss moca`)
 - [ ] Settings page (sources, hotkey) in the app
 - [ ] Clipboard-only snips (Win+Shift+S without auto-save)
