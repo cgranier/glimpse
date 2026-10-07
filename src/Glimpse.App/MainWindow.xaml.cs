@@ -22,19 +22,11 @@ namespace Glimpse.App;
 
 public sealed partial class MainWindow : Window
 {
-    readonly GlimpseConfig _config = GlimpseConfig.Load();
-
-    // Separate connections: searches run on a worker thread, indexing writes on another. WAL lets them coexist.
-    readonly ImageIndex _searchIndex = new();
-    readonly ImageIndex _writeIndex = new();
-    readonly Indexer _indexer;
-    readonly FolderWatcher _watcher;
-    readonly ClipModel? _clip;              // null when the visual model isn't installed
-    readonly EmbeddingIndexer? _embedder;
-    readonly SearchEngine _engine;
+    readonly GlimpseRuntime _runtime = new(GlimpseConfig.Load());
     readonly IpcServer _ipc;
-    readonly GlobalHotkey _hotkey;
     readonly TrayIcon _tray;
+    GlobalHotkey _hotkey;
+    SettingsWindow? _settings;
     bool _quitting;
     bool _indexing;
 
@@ -63,17 +55,8 @@ public sealed partial class MainWindow : Window
         _searchDebounce.IsRepeating = false;
         _searchDebounce.Tick += (_, _) => _ = RunSearchAsync(SearchBox.Text);
 
-        if (_config.VisualModelPath is { } modelDir && ClipModel.IsInstalled(modelDir))
-        {
-            _clip = new ClipModel(modelDir, _config.UseGpu);
-            _embedder = new EmbeddingIndexer(_config, _writeIndex, _clip);
-        }
-        _engine = new SearchEngine(_searchIndex, _clip);
-        if (_clip is null) VisualOnly.Visibility = Visibility.Collapsed;
-
-        _indexer = new Indexer(_config, _writeIndex);
-        _watcher = new FolderWatcher(_config, _indexer);
-        _watcher.Indexed += n => DispatcherQueue.TryEnqueue(async () =>
+        VisualOnly.Visibility = _runtime.VisualAvailable ? Visibility.Visible : Visibility.Collapsed;
+        _runtime.NewImagesIndexed += n => DispatcherQueue.TryEnqueue(async () =>
         {
             SetIndexStatus($"indexed {n} new image{(n == 1 ? "" : "s")}");
             await EmbedNewAsync();
@@ -81,8 +64,7 @@ public sealed partial class MainWindow : Window
         });
 
         var hwnd = WindowNative.GetWindowHandle(this);
-        _hotkey = new GlobalHotkey(hwnd, _config.Hotkey);
-        _hotkey.Pressed += () => DispatcherQueue.TryEnqueue(Summon);
+        _hotkey = RegisterHotkey(_runtime.Config.Hotkey);
 
         _tray = new TrayIcon(hwnd, icon, "Glimpse");
         _tray.Clicked += Summon;
@@ -103,15 +85,17 @@ public sealed partial class MainWindow : Window
         };
 
         // The Command Palette extension searches through the app over a named pipe.
-        _ipc = new IpcServer(_engine, OnUiThread(CopyImageAsync), query => DispatcherQueue.TryEnqueue(() =>
+        _ipc = new IpcServer(_runtime, OnUiThread(CopyImageAsync), OnUiThread(CopyTextAsync), query => DispatcherQueue.TryEnqueue(() =>
         {
             if (query is not null) SearchBox.Text = query;
             Show();
         }));
         _ipc.Start();
 
-        // Load the CLIP text encoder now, so the first search (here or from Command Palette) doesn't pay for it.
-        if (_clip is not null) _ = Task.Run(() => _clip.EmbedText("warm up"));
+        // Ctrl+, opens Settings (comma has no named VirtualKey, so it's added here rather than in XAML).
+        var settingsKey = new KeyboardAccelerator { Modifiers = VirtualKeyModifiers.Control, Key = (VirtualKey)188 };
+        settingsKey.Invoked += OnShowSettings;
+        Root.KeyboardAccelerators.Add(settingsKey);
 
         _ = RunSearchAsync("");
         _ = CatchUpIndexAsync();
@@ -165,43 +149,115 @@ public sealed partial class MainWindow : Window
 
     IReadOnlyList<TrayMenuItem> BuildTrayMenu() =>
     [
-        new($"Open Glimpse\t{_config.Hotkey}", Show, IsDefault: true),
-        new(_indexing ? "Indexing…" : "Re-index now", () => { if (!_indexing) _ = CatchUpIndexAsync(); }),
+        new($"Open Glimpse\t{_runtime.Config.Hotkey}", Show, IsDefault: true),
+        new(_indexing ? "Indexing…" : "Re-index now", () => _ = CatchUpIndexAsync()),
         TrayMenuItem.Separator,
-        new(AutoStart.PointsElsewhere ? "Start with Windows (another copy)" : "Start with Windows",
-            () => AutoStart.Set(!AutoStart.IsEnabled || AutoStart.PointsElsewhere), Checked: AutoStart.IsEnabled),
-        new("Open config folder", () => Process.Start("explorer.exe", $"\"{GlimpseConfig.DataDir}\"")),
+        new("Settings…", ShowSettings),
         TrayMenuItem.Separator,
         new("Quit", Quit),
     ];
 
     void Shutdown()
     {
+        _settings?.Close();
         _ipc.Dispose();
         _tray.Dispose();
         _hotkey.Dispose();
-        _watcher.Dispose();
-        _searchIndex.Dispose();
-        _writeIndex.Dispose();
-        _clip?.Dispose();
+        _runtime.Dispose();
+    }
+
+    // ---- settings -------------------------------------------------------------------------
+
+    public void OpenSettings() => ShowSettings();
+
+    void ShowSettings()
+    {
+        if (_settings is null)
+        {
+            _settings = new SettingsWindow(_runtime, ApplySettings, () => CatchUpIndexAsync(), RebuildIndexAsync, OnModelDownloaded);
+            _settings.Closed += (_, _) => _settings = null;
+        }
+        _settings.Activate();
+    }
+
+    void OnShowSettings(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        ShowSettings();
+    }
+
+    void OnSettingsClick(object sender, RoutedEventArgs e) => ShowSettings();
+
+    /// <summary>Settings changed something: rebuild what depends on it and catch the index up.</summary>
+    void ApplySettings(GlimpseConfig next)
+    {
+        var result = _runtime.Apply(next);
+        if (result.HotkeyChanged)
+        {
+            _hotkey.Dispose();
+            _hotkey = RegisterHotkey(next.Hotkey);
+        }
+        VisualOnly.Visibility = _runtime.VisualAvailable ? Visibility.Visible : Visibility.Collapsed;
+        if (!_runtime.VisualAvailable) VisualOnly.IsChecked = false;
+
+        if (result.IndexingChanged || result.VisualChanged) _ = CatchUpIndexAsync();
+        else SetIndexStatus(_indexStatus);
+        if (result.ImagesForgotten > 0 || result.VisualChanged) _ = RunSearchAsync(SearchBox.Text);
+    }
+
+    void OnModelDownloaded()
+    {
+        _runtime.ReloadVisual();
+        ApplySettings(_runtime.Config.Clone()); // refresh UI state
+        _ = CatchUpIndexAsync();                 // embeds everything with the new model
+    }
+
+    async Task RebuildIndexAsync()
+    {
+        await Task.Run(_runtime.WriteIndex.Clear);
+        _runtime.Engine.InvalidateVisual();
+        _items.Clear();
+        await CatchUpIndexAsync();
+    }
+
+    GlobalHotkey RegisterHotkey(string gesture)
+    {
+        var hotkey = new GlobalHotkey(WindowNative.GetWindowHandle(this), gesture);
+        hotkey.Pressed += () => DispatcherQueue.TryEnqueue(Summon);
+        return hotkey;
     }
 
     // ---- indexing -------------------------------------------------------------------------
 
+    bool _indexAgain;
+
+    /// <summary>Text pass, then visual pass. Calls while one is running queue exactly one more run.</summary>
     async Task CatchUpIndexAsync()
     {
+        if (_indexing)
+        {
+            _indexAgain = true;
+            return;
+        }
         _indexing = true;
-        var progress = new Progress<IndexProgress>(p =>
-            SetIndexStatus(p.Total == 0 ? p.Phase + "…" : $"indexing {p.Done}/{p.Total}"));
         try
         {
-            var report = await Task.Run(() => _indexer.RunAsync(progress: progress));
-            SetIndexStatus(report.Indexed > 0 ? $"indexed {report.Indexed} new" : "up to date");
-            var embedded = await EmbedNewAsync();
-            if (report.Indexed > 0 || report.Removed > 0 || embedded > 0) _ = RunSearchAsync(SearchBox.Text);
+            do
+            {
+                _indexAgain = false;
+                var indexer = _runtime.Indexer;
+                var progress = new Progress<IndexProgress>(p =>
+                    SetIndexStatus(p.Total == 0 ? p.Phase + "…" : $"indexing {p.Done}/{p.Total}"));
+                var report = await Task.Run(() => indexer.RunAsync(progress: progress));
+                SetIndexStatus(report.Indexed > 0 ? $"indexed {report.Indexed} new" : "up to date");
+                var embedded = await EmbedNewAsync();
+                if (report.Indexed > 0 || report.Removed > 0 || embedded > 0) _ = RunSearchAsync(SearchBox.Text);
+            }
+            while (_indexAgain);
         }
         catch (Exception ex)
         {
+            App.Log(ex);
             SetIndexStatus("indexing failed: " + ex.Message);
         }
         finally
@@ -213,15 +269,15 @@ public sealed partial class MainWindow : Window
     /// <summary>Visual pass: CLIP-embed anything the text pass added. Returns how many were embedded.</summary>
     async Task<int> EmbedNewAsync()
     {
-        if (_embedder is null) return 0;
+        if (_runtime.Embedder is not { } embedder) return 0;
         var progress = new Progress<IndexProgress>(p => SetIndexStatus($"visual indexing {p.Done}/{p.Total}"));
         try
         {
-            var report = await Task.Run(() => _embedder.RunAsync(progress));
+            var report = await Task.Run(() => embedder.RunAsync(progress));
             if (report.Embedded + report.Failed > 0)
             {
-                _engine.InvalidateVisual();
-                SetIndexStatus($"up to date · visual on {_clip!.VisionDevice}");
+                _runtime.Engine.InvalidateVisual();
+                SetIndexStatus($"up to date · visual on {_runtime.Clip?.VisionDevice}");
             }
             return report.Embedded;
         }
@@ -236,11 +292,13 @@ public sealed partial class MainWindow : Window
     void SetIndexStatus(string status)
     {
         _indexStatus = status;
-        var stats = _searchIndex.GetStats(); // a few COUNT(*)s — cheap enough for the UI thread
-        var visual = _clip is null ? "visual off" : $"{stats.Embedded:N0} visual";
+        var stats = _runtime.SearchIndex.GetStats(); // a few COUNT(*)s — cheap enough for the UI thread
+        var visual = _runtime.VisualAvailable ? $"{stats.Embedded:N0} visual" : "visual off";
+        var hotkey = _runtime.Config.Hotkey;
         StatusText.Text = $"{stats.Images:N0} images · {stats.WithText:N0} with text · {visual} · {_indexStatus}" +
-                          (_hotkey.IsRegistered ? $" · {_config.Hotkey} to summon" : $" · hotkey {_config.Hotkey} unavailable");
+                          (_hotkey.IsRegistered ? $" · {hotkey} to summon" : $" · hotkey {hotkey} unavailable");
         _tray.Tooltip = $"Glimpse — {stats.Images:N0} images · {_indexStatus}";
+        _settings?.RefreshStats();
     }
 
     // ---- search ---------------------------------------------------------------------------
@@ -259,7 +317,8 @@ public sealed partial class MainWindow : Window
         try
         {
             var effective = VisualOnly.IsChecked == true && !query.TrimStart().StartsWith('~') ? "~" + query : query;
-            hits = await Task.Run(() => _engine.Search(effective, limit: 120));
+            var engine = _runtime.Engine;
+            hits = await Task.Run(() => engine.Search(effective, limit: 120));
         }
         catch (Exception ex)
         {
@@ -366,7 +425,7 @@ public sealed partial class MainWindow : Window
             .Where(t => t.Length >= 2).ToList();
         if (terms.Count == 0) return;
 
-        var lines = _searchIndex.GetOcrLines(id);
+        var lines = _runtime.SearchIndex.GetOcrLines(id);
 
         var accent = (Windows.UI.Color)Application.Current.Resources["SystemAccentColor"];
         var stroke = Math.Max(2, PreviewSurface.Width / 400);
@@ -434,7 +493,7 @@ public sealed partial class MainWindow : Window
     void OnToggleVisual(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
         args.Handled = true;
-        if (_clip is null) return;
+        if (!_runtime.VisualAvailable) return;
         VisualOnly.IsChecked = VisualOnly.IsChecked != true;
         _ = RunSearchAsync(SearchBox.Text);
     }
@@ -442,7 +501,7 @@ public sealed partial class MainWindow : Window
     void OnMoreLikeThis(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
         args.Handled = true;
-        if (_clip is null || Selected is not { } item) return;
+        if (!_runtime.VisualAvailable || Selected is not { } item) return;
         SearchBox.Text = $"like:{item.Hit.Id}";
         SearchBox.Focus(FocusState.Programmatic);
         SearchBox.SelectionStart = SearchBox.Text.Length;
@@ -452,11 +511,34 @@ public sealed partial class MainWindow : Window
     {
         args.Handled = true;
         if (Selected is not { } item) return;
+        CopyTextAsync(item.Hit.Path);
+        CountText.Text = "path copied";
+    }
+
+    /// <summary>Ctrl+Shift+T: the text Glimpse read from the image, line breaks kept.</summary>
+    void OnCopyText(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        if (Selected is not { } item) return;
+        var text = _runtime.SearchIndex.GetText(item.Hit.Id);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            CountText.Text = "no text in this image";
+            return;
+        }
+        CopyTextAsync(text);
+        var lines = text.Split('\n').Length;
+        CountText.Text = $"text copied · {lines} line{(lines == 1 ? "" : "s")}";
+    }
+
+    /// <summary>Must run on the UI thread.</summary>
+    static Task CopyTextAsync(string text)
+    {
         var data = new DataPackage();
-        data.SetText(item.Hit.Path);
+        data.SetText(text);
         Clipboard.SetContent(data);
         Clipboard.Flush();
-        CountText.Text = "path copied";
+        return Task.CompletedTask;
     }
 
     void OnFocusSearch(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)

@@ -28,6 +28,13 @@ public sealed class EmbeddingIndexer(GlimpseConfig config, ImageIndex index, Cli
         }
     }
 
+    /// <summary>Completes once no pass is running (so the model can be disposed safely).</summary>
+    public async Task WhenIdleAsync()
+    {
+        await _runLock.WaitAsync();
+        _runLock.Release();
+    }
+
     async Task<EmbedReport> RunCoreAsync(IProgress<IndexProgress>? progress, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();

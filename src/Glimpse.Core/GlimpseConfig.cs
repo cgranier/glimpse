@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -6,7 +7,7 @@ namespace Glimpse.Core;
 /// <summary>A folder Glimpse watches and indexes. <see cref="Name"/> is what `in:` filters match.</summary>
 public sealed record Source(string Name, string Path, bool Recursive = true);
 
-public sealed class GlimpseConfig
+public sealed partial class GlimpseConfig
 {
     public List<Source> Sources { get; set; } = [];
 
@@ -24,14 +25,18 @@ public sealed class GlimpseConfig
     /// </summary>
     public bool HydrateCloudFiles { get; set; } = false;
 
-    /// <summary>Folder name under models\ holding the CLIP ONNX files. Empty disables visual search.</summary>
-    public string VisualModel { get; set; } = "clip-vit-b16";
+    /// <summary>Search by what images look like (CLIP). Needs the model (Settings → Visual search → Download).</summary>
+    public bool VisualSearch { get; set; } = true;
+
+    /// <summary>Folder name under models\ holding the CLIP ONNX files.</summary>
+    public string VisualModel { get; set; } = Visual.ModelCatalog.Default.Name;
 
     /// <summary>Run the image encoder on the GPU (DirectML). Falls back to CPU automatically.</summary>
     public bool UseGpu { get; set; } = true;
 
     [JsonIgnore]
-    public string? VisualModelPath => string.IsNullOrWhiteSpace(VisualModel) ? null : System.IO.Path.Combine(DataDir, "models", VisualModel);
+    public string? VisualModelPath =>
+        !VisualSearch || string.IsNullOrWhiteSpace(VisualModel) ? null : System.IO.Path.Combine(ModelsDir, VisualModel);
 
     /// <summary>Concurrent OCR workers. Windows OCR is CPU-bound; half the cores keeps the machine responsive.</summary>
     public int Workers { get; set; } = Math.Max(1, Environment.ProcessorCount / 2);
@@ -41,6 +46,7 @@ public sealed class GlimpseConfig
 
     public static string ConfigPath => System.IO.Path.Combine(DataDir, "config.json");
     public static string DatabasePath => System.IO.Path.Combine(DataDir, "index.db");
+    public static string ModelsDir => System.IO.Path.Combine(DataDir, "models");
 
     static readonly JsonSerializerOptions Json = new()
     {
@@ -65,18 +71,51 @@ public sealed class GlimpseConfig
         File.WriteAllText(ConfigPath, JsonSerializer.Serialize(this, Json));
     }
 
-    /// <summary>First-run defaults: whichever of the usual suspects exist on this machine.</summary>
+    /// <summary>Deep copy, for editing in the settings window before applying.</summary>
+    public GlimpseConfig Clone() => JsonSerializer.Deserialize<GlimpseConfig>(JsonSerializer.Serialize(this, Json), Json)!;
+
+    /// <summary>True if switching from this config to <paramref name="other"/> changes what gets indexed.</summary>
+    public bool IndexingDiffers(GlimpseConfig other) =>
+        !Sources.SequenceEqual(other.Sources)
+        || !Extensions.SequenceEqual(other.Extensions, StringComparer.OrdinalIgnoreCase)
+        || HydrateCloudFiles != other.HydrateCloudFiles
+        || Workers != other.Workers;
+
+    public bool VisualDiffers(GlimpseConfig other) =>
+        VisualModelPath != other.VisualModelPath || UseGpu != other.UseGpu || Workers != other.Workers;
+
+    /// <summary>
+    /// First-run defaults: the Windows Screenshots and Downloads known folders (they follow OneDrive
+    /// folder backup and any relocation), plus OneDrive's own Screenshots folder if it's separate.
+    /// More folders (a notes vault, a work share…) are added in Settings.
+    /// </summary>
     static GlimpseConfig CreateDefault()
     {
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var candidates = new[]
+        var candidates = new List<Source>();
+        void Add(string name, string? path)
         {
-            new Source("screenshots", System.IO.Path.Combine(home, "OneDrive", "Pictures", "Screenshots")),
-            new Source("screenshots-old", System.IO.Path.Combine(home, "OneDrive", "Pictures", "Screenshots 1")),
-            new Source("screenshots-local", System.IO.Path.Combine(home, "Pictures", "Screenshots")),
-            new Source("notes", System.IO.Path.Combine(home, "_cowork", "_mNOTES")),
-            new Source("downloads", System.IO.Path.Combine(home, "Downloads")),
-        };
-        return new GlimpseConfig { Sources = candidates.Where(s => Directory.Exists(s.Path)).ToList() };
+            if (path is null || !Directory.Exists(path)) return;
+            if (candidates.Any(c => string.Equals(c.Path, path, StringComparison.OrdinalIgnoreCase))) return;
+            candidates.Add(new Source(candidates.Any(c => c.Name == name) ? $"{name}-{candidates.Count}" : name, path));
+        }
+
+        Add("screenshots", KnownFolder(Screenshots));
+        Add("screenshots", Environment.GetEnvironmentVariable("OneDrive") is { } od ? System.IO.Path.Combine(od, "Pictures", "Screenshots") : null);
+        Add("screenshots", System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Screenshots"));
+        Add("downloads", KnownFolder(Downloads));
+        return new GlimpseConfig { Sources = candidates };
     }
+
+    static readonly Guid Screenshots = new("b7bede81-df94-4682-a7d8-57a52620b86f");
+    static readonly Guid Downloads = new("374de290-123f-4565-9164-39c4925e467b");
+
+    static string? KnownFolder(Guid id)
+    {
+        if (SHGetKnownFolderPath(id, 0, 0, out var ptr) != 0) return null;
+        try { return Marshal.PtrToStringUni(ptr); }
+        finally { Marshal.FreeCoTaskMem(ptr); }
+    }
+
+    [LibraryImport("shell32.dll")]
+    private static partial int SHGetKnownFolderPath(in Guid id, uint flags, nint token, out nint path);
 }

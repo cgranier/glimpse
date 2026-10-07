@@ -10,7 +10,7 @@ namespace Glimpse.Core.Ipc;
 // Wire format: one UTF-8 JSON request line, one JSON response line, then the connection closes.
 
 public sealed record IpcRequest(
-    string Op,                 // search | copy | reveal | show | ping
+    string Op,                 // search | copy | copytext (Id) | reveal | show | ping
     string? Query = null,
     long? Id = null,
     int Limit = 40,

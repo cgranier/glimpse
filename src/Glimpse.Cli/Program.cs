@@ -14,6 +14,7 @@ try
     {
         "index" => await Index(rest),
         "embed" => await Embed(),
+        "model" => await Model(),
         "tokens" => Tokens(string.Join(' ', rest)), // debug: CLIP token ids
         "search" or "s" => Search(string.Join(' ', rest)),
         "ocr" => await Ocr(rest),
@@ -89,6 +90,24 @@ static int Search(string query)
         var kind = h.VisualScore is float score ? $"\x1b[36m≈ {score:F3}\x1b[0m " : "";
         Console.WriteLine($"  {kind}\x1b[2m{h.Source} · {h.Modified:yyyy-MM-dd HH:mm}\x1b[0m  {snippet}");
     }
+    return 0;
+}
+
+static async Task<int> Model()
+{
+    var model = ModelCatalog.Default;
+    var dir = Path.Combine(GlimpseConfig.ModelsDir, model.Name);
+    if (ModelCatalog.IsInstalled(model, dir))
+    {
+        Console.WriteLine($"{model.DisplayName} is installed in {dir}");
+        return 0;
+    }
+    Console.WriteLine($"Downloading {model.DisplayName} ({model.TotalSize / 1048576} MB, {model.License}) from {model.SourceUrl}");
+    using var cts = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+    var progress = new Progress<(long Done, long Total)>(p => Console.Write($"\r  {p.Done / 1048576} / {p.Total / 1048576} MB   "));
+    await ModelCatalog.DownloadAsync(model, dir, progress, cts.Token);
+    Console.WriteLine($"\ninstalled — run `glimpse embed` to index visually");
     return 0;
 }
 
@@ -172,6 +191,7 @@ static int Help()
         glimpse — find images by the text in them
 
           glimpse index [source...]    scan sources and OCR new/changed images
+          glimpse model                download the visual search model (~392 MB, once)
           glimpse embed                CLIP-embed images for visual search (after index)
           glimpse search <query>       e.g.  moca network  ·  ~network diagram  ·  in:notes after:2026-05 invoice  ·  like:1234
           glimpse ocr <file>           OCR a single image and print the text

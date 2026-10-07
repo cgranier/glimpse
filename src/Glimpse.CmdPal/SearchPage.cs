@@ -209,7 +209,7 @@ internal sealed partial class RevealCommand(string path) : InvokableCommand
 }
 
 /// <summary>Asks the Glimpse app to do something that needs its UI thread (clipboard, window).</summary>
-internal sealed partial class AppCommand(string op, string arg, string name, string glyph, string? toast = null) : InvokableCommand
+internal sealed partial class AppCommand(string op, string arg, string name, string glyph, string? toast = null, long? id = null) : InvokableCommand
 {
     public override string Name => name;
     public override IconInfo Icon => new(glyph);
@@ -218,7 +218,7 @@ internal sealed partial class AppCommand(string op, string arg, string name, str
     {
         try
         {
-            var response = GlimpseIpc.SendAsync(new IpcRequest(op, arg), TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            var response = GlimpseIpc.SendAsync(new IpcRequest(op, arg, id), TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
             if (!response.Ok) return CommandResult.ShowToast(response.Error ?? "Glimpse couldn't do that");
         }
         catch (Exception)

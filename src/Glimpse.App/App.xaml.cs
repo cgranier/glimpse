@@ -50,6 +50,7 @@ public partial class App : Application
         _window = new MainWindow();
         if (hidden) _window.StartHidden();
         else _window.Activate();
+        if (Environment.GetCommandLineArgs().Contains("--settings", StringComparer.OrdinalIgnoreCase)) _window.OpenSettings();
     }
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]

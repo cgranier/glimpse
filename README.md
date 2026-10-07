@@ -11,7 +11,7 @@ any 3+ character fragment matches anywhere in a word.
 
 ```
 src/Glimpse.Core   OCR, SQLite index, incremental indexer, folder watcher
-src/Glimpse.Cli    `glimpse` command: index / search / ocr / stats / sources
+src/Glimpse.Cli    `glimpse` command: index / embed / model / search / ocr / stats / sources
 src/Glimpse.App    WinUI 3 search window (unpackaged, Mica, global hotkey, tray, pipe server)
 src/Glimpse.CmdPal PowerToys Command Palette extension (MSIX, talks to the app over a named pipe)
 ```
@@ -24,7 +24,7 @@ pwsh scripts/install.ps1 -NoAutoStart   # same, without the login entry
 ```
 
 Re-run to update. Glimpse lives in the tray: left-click toggles the window, right-click for
-Re-index now / Start with Windows / Open config folder / Quit. The X button hides to the tray.
+Re-index now / Settings / Quit. The X button hides to the tray.
 Launching it again just brings up the running copy. Windows 11 puts new tray icons in the ^ overflow;
 drag it onto the taskbar to keep it visible.
 
@@ -52,23 +52,15 @@ loose text hits and visual matches interleaved (reciprocal rank fusion). Visual 
 "≈ looks like" badge. **Visual** toggle (Ctrl+T) or a `~` prefix = visual only. **Ctrl+M** = more like the
 selected image.
 
-The model is a one-time ~392 MB download into `%LOCALAPPDATA%\Glimpse\models\clip-vit-b16`:
-
-```powershell
-$dir = "$env:LOCALAPPDATA\Glimpse\models\clip-vit-b16"; mkdir $dir -Force
-$base = "https://huggingface.co/Xenova/clip-vit-base-patch16/resolve/main"
-foreach ($f in "vocab.json","merges.txt","onnx/text_model_quantized.onnx","onnx/vision_model.onnx") {
-  curl.exe -L -o "$dir\$(Split-Path $f -Leaf)" "$base/$f" }
-```
-
-Without it, visual search is simply off. The app embeds new images after each OCR pass; from the CLI run
-`glimpse embed`.
+The model is a one-time ~392 MB download (Settings → Visual search → **Download**, or `glimpse model`)
+into `%LOCALAPPDATA%\Glimpse\models\clip-vit-b16`, with resumable, size-checked files. Without it, visual
+search is simply off. The app embeds new images after each OCR pass; from the CLI run `glimpse embed`.
 
 ## Command Palette
 
 `src/Glimpse.CmdPal` is a [PowerToys Command Palette](https://learn.microsoft.com/windows/powertoys/command-palette/overview)
 extension: type **Glimpse** in the palette (Win+Alt+Space) for a live thumbnail grid with a details pane.
-Enter opens, **Ctrl+Enter copies the image**, Ctrl+K for copy path / show in folder / more like this /
+Enter opens, **Ctrl+Enter copies the image**, **Ctrl+Shift+T copies its text**, Ctrl+K for copy path / show in folder / more like this /
 open in Glimpse. A filter dropdown switches to visual only. Typing 3+ characters on the palette's home
 also offers *Search images for "…"* under Fallbacks.
 
@@ -78,7 +70,7 @@ pwsh scripts/install-cmdpal.ps1 -Uninstall
 ```
 
 Tip: give it an alias in Command Palette → Settings → Extensions → Glimpse (e.g. `ss`), then
-`ss moca` jumps straight to results.
+`ss moca` jumps straight to results. (Every command has a stable id, so aliases and pins survive updates.)
 
 How it fits together: the extension is an MSIX-packaged COM server (that's how the palette loads
 extensions). It doesn't open the index itself; it asks the running Glimpse app over a per-user named
@@ -100,24 +92,31 @@ can't read the thumbnail cache by path.
 
 ## Keys
 
-Win+Alt+S toggle · Enter open · Ctrl+C copy image · Ctrl+Shift+C copy path · Ctrl+E show in folder · Ctrl+T visual only · Ctrl+M more like this · Esc clear / hide · Ctrl+Q quit
+Win+Alt+S toggle · Enter open · Ctrl+C copy image · **Ctrl+Shift+T copy text** · Ctrl+Shift+C copy path · Ctrl+E show in folder · Ctrl+T visual only · Ctrl+M more like this · Ctrl+, settings · Esc clear / hide · Ctrl+Q quit
 
-## Config
+## Settings
 
-`%LOCALAPPDATA%\Glimpse\config.json` (created on first run):
+Tray → Settings, the gear in the search bar, or **Ctrl+,**. Changes apply immediately, no restart:
 
-- `sources`: name + path for each folder (default: OneDrive screenshots, old screenshots, _mNOTES, Downloads)
-- `hotkey`: e.g. `"Win+Alt+S"`, `"Ctrl+Alt+F"`
-- `hydrateCloudFiles`: OneDrive online-only files are skipped unless this is `true` (indexing downloads them)
-- `workers`: parallel OCR workers
+- **Keyboard shortcut**: modifiers + key, checked live against what Windows and other apps already use
+- **Start with Windows**
+- **Folders**: add (folder picker), remove, rename (the name is what `in:` matches), include subfolders.
+  Removing or renaming a folder takes its images out of the index; files are never touched
+- **Visual search**: on/off, model download / remove with progress, GPU on/off
+- **Indexing**: OneDrive online-only files, parallel workers, index stats, Re-index now, Rebuild,
+  thumbnail cache size + Clear
+- **About**: version, data folder, log
 
-Index lives next to it in `index.db` (about 45 MB for 8k images).
+First run defaults to the Windows *Screenshots* and *Downloads* known folders (following OneDrive backup
+or relocation). Everything is stored in `%LOCALAPPDATA%\Glimpse` (`config.json`, `index.db`, `models\`,
+`thumbs\`, `glimpse.log`).
 
 ## Roadmap
 
 - [x] Visual search (CLIP embeddings via ONNX) — "network diagram", "dark dashboard"
 - [x] Tray icon + start with Windows
 - [x] Command Palette extension (`ss moca`)
-- [ ] Settings page (sources, hotkey) in the app
+- [x] Settings page (folders, hotkey, visual model download, indexing)
+- [x] Copy text (Ctrl+Shift+T, also in Command Palette)
 - [ ] Clipboard-only snips (Win+Shift+S without auto-save)
 - [ ] OCR + embed several GIF frames, not just the first

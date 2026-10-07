@@ -27,6 +27,20 @@ public sealed partial class GlobalHotkey : IDisposable
         IsRegistered = vk != 0 && RegisterHotKey(hwnd, _id, mods | MOD_NOREPEAT, vk);
     }
 
+    /// <summary>
+    /// Whether Windows would give us this combination right now: register it briefly on the calling
+    /// thread, then release it. False if it's malformed or another app (or the OS) owns it.
+    /// </summary>
+    public static bool IsAvailable(string gesture)
+    {
+        var (mods, vk) = Parse(gesture);
+        if (vk == 0 || mods == 0) return false;
+        const int probeId = 0x6C2;
+        if (!RegisterHotKey(0, probeId, mods | MOD_NOREPEAT, vk)) return false;
+        UnregisterHotKey(0, probeId);
+        return true;
+    }
+
     /// <summary>Parses "Win+Shift+F", "Ctrl+Alt+Space", etc.</summary>
     static (uint Mods, uint Vk) Parse(string gesture)
     {

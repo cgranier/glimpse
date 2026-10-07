@@ -191,7 +191,44 @@ public sealed class ImageIndex : IDisposable
         fts.ExecuteNonQuery();
     }
 
+    /// <summary>Forgets every image from a source (it was removed in Settings).</summary>
+    public int RemoveSource(string source)
+    {
+        lock (_gate)
+        {
+            using var tx = _db.BeginTransaction();
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = """
+                DELETE FROM images_fts WHERE rowid IN (SELECT id FROM images WHERE source = $source);
+                DELETE FROM embeddings WHERE image_id IN (SELECT id FROM images WHERE source = $source);
+                DELETE FROM images WHERE source = $source;
+                """;
+            cmd.Parameters.AddWithValue("$source", source);
+            var removed = cmd.ExecuteNonQuery();
+            tx.Commit();
+            return removed;
+        }
+    }
+
+    /// <summary>Drops everything (Settings → Rebuild index). The next scan starts from scratch.</summary>
+    public void Clear()
+    {
+        lock (_gate)
+        {
+            using var tx = _db.BeginTransaction();
+            Exec(_db, "DELETE FROM images_fts; DELETE FROM embeddings; DELETE FROM images;");
+            tx.Commit();
+            Exec(_db, "VACUUM;");
+        }
+    }
+
     // ---- reads ----------------------------------------------------------------------------
+
+    /// <summary>The OCR'd text of one image, line breaks kept (for "Copy text").</summary>
+    public string GetText(long id)
+    {
+        lock (_gate) return Scalar(_db, "SELECT text FROM images_fts WHERE rowid = $id", ("$id", id)) as string ?? "";
+    }
 
     public Dictionary<string, IndexedFile> GetFiles(string source)
     {

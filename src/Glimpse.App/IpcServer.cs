@@ -13,7 +13,7 @@ namespace Glimpse.App;
 /// per-user named pipe. Searches run on the warm engine the window uses; UI-bound operations
 /// (clipboard, showing the window) are handed to the window through the callbacks.
 /// </summary>
-public sealed class IpcServer(SearchEngine engine, Func<string, Task> copyImage, Action<string?> show) : IDisposable
+public sealed class IpcServer(GlimpseRuntime runtime, Func<string, Task> copyImage, Func<string, Task> copyText, Action<string?> show) : IDisposable
 {
     const int Listeners = 4;
     readonly CancellationTokenSource _stop = new();
@@ -59,6 +59,7 @@ public sealed class IpcServer(SearchEngine engine, Func<string, Task> copyImage,
 
     async Task<IpcResponse> HandleAsync(IpcRequest request, CancellationToken ct)
     {
+        var engine = runtime.Engine; // read per request: Settings can swap it
         switch (request.Op)
         {
             case "ping":
@@ -82,6 +83,12 @@ public sealed class IpcServer(SearchEngine engine, Func<string, Task> copyImage,
 
             case "copy" when request.Query is { Length: > 0 } path && File.Exists(path):
                 await copyImage(path);
+                return new IpcResponse(true);
+
+            case "copytext" when request.Id is long id:
+                var text = runtime.SearchIndex.GetText(id);
+                if (string.IsNullOrWhiteSpace(text)) return new IpcResponse(false, "No text in this image");
+                await copyText(text);
                 return new IpcResponse(true);
 
             case "reveal" when request.Query is { Length: > 0 } path && File.Exists(path):
