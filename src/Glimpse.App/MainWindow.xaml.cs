@@ -35,6 +35,7 @@ public sealed partial class MainWindow : Window
 
     readonly ObservableCollection<ResultItem> _items = [];
     readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _searchDebounce;
+    readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _changedDebounce;
     int _searchGeneration;
     string _lastQuery = "";
     string _indexStatus = "";
@@ -60,10 +61,19 @@ public sealed partial class MainWindow : Window
 
         VisualOnly.Visibility = _runtime.VisualAvailable ? Visibility.Visible : Visibility.Collapsed;
         // Renamed/moved/deleted images: refresh what's on screen so nothing points at an old path.
-        _runtime.ImagesChanged += () => DispatcherQueue.TryEnqueue(() =>
+        // Deleting or moving a batch of files fires one event each; refresh once they've settled.
+        _changedDebounce = DispatcherQueue.CreateTimer();
+        _changedDebounce.Interval = TimeSpan.FromMilliseconds(600);
+        _changedDebounce.IsRepeating = false;
+        _changedDebounce.Tick += (_, _) =>
         {
             _ = RunSearchAsync(SearchBox.Text);
             RefreshStatsSoon();
+        };
+        _runtime.ImagesChanged += () => DispatcherQueue.TryEnqueue(() =>
+        {
+            _changedDebounce.Stop();
+            _changedDebounce.Start();
         });
         _runtime.NewImagesIndexed += n => DispatcherQueue.TryEnqueue(async () =>
         {
@@ -542,14 +552,16 @@ public sealed partial class MainWindow : Window
         PreviewImage.Source = bmp;
     }
 
-    void DrawMatches(long id)
+    async void DrawMatches(long id)
     {
         var terms = SearchQuery.Parse(_lastQuery).Terms
             .SelectMany(t => t.Split(' ', StringSplitOptions.RemoveEmptyEntries))
             .Where(t => t.Length >= 2).ToList();
         if (terms.Count == 0) return;
 
-        var lines = _runtime.SearchIndex.GetOcrLines(id);
+        // Never touch the database on the UI thread: if indexing holds it, the window would freeze.
+        var lines = await Task.Run(() => _runtime.SearchIndex.GetOcrLines(id));
+        if ((Results.SelectedItem as ResultItem)?.Hit.Id != id) return; // selection moved on meanwhile
 
         var accent = (Windows.UI.Color)Application.Current.Resources["SystemAccentColor"];
         var stroke = Math.Max(2, PreviewSurface.Width / 400);
@@ -640,17 +652,17 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>Ctrl+Shift+T: the text Glimpse read from the image, line breaks kept.</summary>
-    void OnCopyText(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    async void OnCopyText(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
         args.Handled = true;
         if (Selected is not { } item) return;
-        var text = _runtime.SearchIndex.GetText(item.Hit.Id);
+        var text = await Task.Run(() => _runtime.SearchIndex.GetText(item.Hit.Id));
         if (string.IsNullOrWhiteSpace(text))
         {
             CountText.Text = "no text in this image";
             return;
         }
-        CopyTextAsync(text);
+        await CopyTextAsync(text);
         var lines = text.Split('\n').Length;
         CountText.Text = $"text copied · {lines} line{(lines == 1 ? "" : "s")}";
     }

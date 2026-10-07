@@ -41,16 +41,23 @@ public sealed class SearchEngine(ImageIndex index, ClipModel? clip)
     {
         var missing = hits.Where(h => !File.Exists(h.Path) && Path.GetPathRoot(h.Path) is { } root && Directory.Exists(root)).ToList();
         if (missing.Count == 0) return hits;
-        try
+
+        // Forget them in the background: a write may have to wait for the indexer's write lock, and this
+        // search (and anything else on this connection) shouldn't wait with it.
+        var ids = missing.Select(m => m.Id).ToList();
+        _ = Task.Run(() =>
         {
-            index.RemoveMany(missing.Select(m => m.Id));
-            InvalidateVisual();
-        }
-        catch
-        {
-            // Not fatal: they're still hidden from these results, and the next full scan removes them.
-        }
-        var gone = missing.Select(m => m.Id).ToHashSet();
+            try
+            {
+                index.RemoveMany(ids);
+                InvalidateVisual();
+            }
+            catch
+            {
+                // Not fatal: they're hidden from results meanwhile, and the next full scan removes them.
+            }
+        });
+        var gone = ids.ToHashSet();
         return hits.Where(h => !gone.Contains(h.Id)).ToList();
     }
 

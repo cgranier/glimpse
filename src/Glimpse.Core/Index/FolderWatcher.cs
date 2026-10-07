@@ -50,7 +50,11 @@ public sealed class FolderWatcher : IDisposable
         try
         {
             var isFolder = Directory.Exists(newPath);
-            if (!isFolder && !_extensions.Contains(Path.GetExtension(newPath)))
+            var wasImage = _extensions.Contains(Path.GetExtension(oldPath));
+            var isImage = _extensions.Contains(Path.GetExtension(newPath));
+            // Downloads folders see constant non-image renames (browser .crdownload/.part → final name).
+            if (!isFolder && !wasImage && !isImage) return;
+            if (!isFolder && !isImage)
             {
                 // Renamed to something that isn't an image (photo.png → photo.png.bak).
                 if (_indexer.Forget(oldPath) > 0) Changed?.Invoke();
@@ -72,6 +76,10 @@ public sealed class FolderWatcher : IDisposable
 
     void OnDeleted(string path)
     {
+        // Only images, or something without an extension that may have been a folder; temp files and
+        // finished downloads come and go constantly and were never indexed.
+        var ext = Path.GetExtension(path);
+        if (ext.Length > 0 && !_extensions.Contains(ext)) return;
         try
         {
             _pending.TryRemove(path, out _);
