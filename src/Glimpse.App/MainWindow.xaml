@@ -137,13 +137,28 @@
         </Grid>
 
         <!-- Status -->
-        <Grid Grid.Row="3" Padding="20,6"
+        <!-- Status on the left (trims with … and shows the rest on hover); key hints on the right, hidden
+             when the window is too narrow for both (see OnStatusBarSizeChanged). -->
+        <Grid Grid.Row="3" Padding="20,6" ColumnSpacing="24" SizeChanged="OnStatusBarSizeChanged"
               Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
             <TextBlock x:Name="StatusText" Style="{StaticResource CaptionTextBlockStyle}"
-                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-            <TextBlock HorizontalAlignment="Right" Style="{StaticResource CaptionTextBlockStyle}"
-                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                       Text="Enter open · Ctrl+C copy image · Ctrl+Shift+T copy text · Ctrl+M more like this · Ctrl+E show in folder · Esc hide" />
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+            <TextBlock x:Name="KeyHints" Grid.Column="1" Style="{StaticResource CaptionTextBlockStyle}"
+                       Foreground="{ThemeResource TextFillColorTertiaryBrush}" TextWrapping="NoWrap"
+                       Text="Enter open · Ctrl+C image · Ctrl+Shift+T text · Ctrl+M similar · Esc hide">
+                <ToolTipService.ToolTip>
+                    <TextBlock>
+                        Enter — open<LineBreak />Ctrl+C — copy image<LineBreak />Ctrl+Shift+T — copy text<LineBreak />
+                        Ctrl+Shift+C — copy path<LineBreak />Ctrl+E — show in folder<LineBreak />Ctrl+M — more like this<LineBreak />
+                        Ctrl+T — visual only<LineBreak />Ctrl+, — settings<LineBreak />Esc — clear / hide<LineBreak />Ctrl+Q — quit
+                    </TextBlock>
+                </ToolTipService.ToolTip>
+            </TextBlock>
         </Grid>
     </Grid>
 </Window>

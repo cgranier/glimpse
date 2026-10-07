@@ -361,8 +361,25 @@ public sealed partial class MainWindow : Window
             : "";
         StatusText.Text = counts + _indexStatus +
                           (_hotkey.IsRegistered ? $" · {hotkey} to summon" : $" · hotkey {hotkey} unavailable");
+        ToolTipService.SetToolTip(StatusText, StatusText.Text); // the bar trims it when the window is narrow
         _tray.Tooltip = $"Glimpse — {(_stats is { } t ? $"{t.Images:N0} images · " : "")}{_indexStatus}";
     }
+
+    /// <summary>Status first: drop the key hints when the bar can't fit both (they're also in the tooltip and README).</summary>
+    void OnStatusBarSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        const double minStatusWidth = 560;
+        // A collapsed element measures as zero, so remember the hints' width from when they were showing.
+        if (KeyHints.Visibility == Visibility.Visible)
+        {
+            KeyHints.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+            _keyHintsWidth = KeyHints.DesiredSize.Width;
+        }
+        var room = e.NewSize.Width - 40 /* padding */ - 24 /* column gap */;
+        KeyHints.Visibility = room - _keyHintsWidth >= minStatusWidth ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    double _keyHintsWidth;
 
     /// <summary>
     /// Recount at most once a second, off the UI thread, and push the result to the status bar and Settings.
