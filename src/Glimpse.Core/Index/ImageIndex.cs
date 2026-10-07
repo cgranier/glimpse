@@ -8,6 +8,9 @@ namespace Glimpse.Core.Index;
 
 public sealed record IndexedFile(long Id, string Path, long Size, long MtimeTicks);
 
+/// <summary>One OCR result to store. <see cref="Page"/> is null when <see cref="Error"/> is set.</summary>
+public sealed record IndexEntry(string Path, string Source, long Size, DateTime MtimeUtc, OcrPage? Page, string? Error);
+
 public sealed record SearchHit(
     long Id,
     string Path,
@@ -30,24 +33,61 @@ public sealed class ImageIndex : IDisposable
     public const char MatchEnd = '\u0002';
 
     const int SchemaVersion = 1;
+    const int SQLITE_CORRUPT = 11, SQLITE_NOTADB = 26;
+
+    // A SqliteConnection must never be used by two threads at once (the app's startup scan and folder
+    // watcher both write). Every public member takes this lock; transactions never escape the class.
+    readonly Lock _gate = new();
     readonly SqliteConnection _db;
 
     public ImageIndex(string? path = null)
     {
         path ??= GlimpseConfig.DatabasePath;
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
-        _db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString());
-        _db.Open();
-        Exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;");
-        Migrate();
+        try
+        {
+            _db = Open(path, verify: true);
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode is SQLITE_CORRUPT or SQLITE_NOTADB)
+        {
+            // The index is only a cache of OCR results: set the damaged file aside and start over.
+            SqliteConnection.ClearAllPools();
+            var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+            foreach (var suffix in new[] { "", "-wal", "-shm" })
+                if (File.Exists(path + suffix)) File.Move(path + suffix, $"{path}.corrupt-{stamp}{suffix}");
+            _db = Open(path, verify: false);
+            Recovered = true;
+        }
     }
 
-    void Migrate()
+    /// <summary>True when the existing index was corrupt and a fresh one was created (needs a full scan).</summary>
+    public bool Recovered { get; }
+
+    SqliteConnection Open(string path, bool verify)
     {
-        var version = Convert.ToInt32(Scalar("PRAGMA user_version"));
+        var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString());
+        db.Open();
+        try
+        {
+            Exec(db, "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 10000;");
+            if (verify && Convert.ToString(Scalar(db, "PRAGMA quick_check")) != "ok")
+                throw new SqliteException("index failed quick_check", SQLITE_CORRUPT);
+            Migrate(db);
+            return db;
+        }
+        catch
+        {
+            db.Dispose();
+            throw;
+        }
+    }
+
+    static void Migrate(SqliteConnection db)
+    {
+        var version = Convert.ToInt32(Scalar(db, "PRAGMA user_version"));
         if (version >= SchemaVersion) return;
 
-        Exec("""
+        Exec(db, """
             CREATE TABLE IF NOT EXISTS images (
                 id          INTEGER PRIMARY KEY,
                 path        TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -66,14 +106,39 @@ public sealed class ImageIndex : IDisposable
             -- rowid = images.id. `name` lets file names match too.
             CREATE VIRTUAL TABLE IF NOT EXISTS images_fts USING fts5(text, name, tokenize = 'trigram');
             """);
-        Exec($"PRAGMA user_version = {SchemaVersion}");
+        Exec(db, $"PRAGMA user_version = {SchemaVersion}");
     }
 
     // ---- writes ---------------------------------------------------------------------------
 
-    public SqliteTransaction BeginTransaction() => _db.BeginTransaction();
+    /// <summary>Writes a batch of OCR results in one transaction.</summary>
+    public void UpsertBatch(IEnumerable<IndexEntry> entries)
+    {
+        lock (_gate)
+        {
+            using var tx = _db.BeginTransaction();
+            foreach (var e in entries) Upsert(e.Path, e.Source, e.Size, e.MtimeUtc, e.Page, e.Error);
+            tx.Commit();
+        }
+    }
 
-    public void Upsert(string path, string source, long size, DateTime mtimeUtc, OcrPage? page, string? error)
+    public void RemoveMany(IEnumerable<long> ids)
+    {
+        lock (_gate)
+        {
+            using var tx = _db.BeginTransaction();
+            foreach (var id in ids)
+            {
+                using var cmd = _db.CreateCommand();
+                cmd.CommandText = "DELETE FROM images_fts WHERE rowid = $id; DELETE FROM images WHERE id = $id;";
+                cmd.Parameters.AddWithValue("$id", id);
+                cmd.ExecuteNonQuery();
+            }
+            tx.Commit();
+        }
+    }
+
+    void Upsert(string path, string source, long size, DateTime mtimeUtc, OcrPage? page, string? error)
     {
         using var cmd = _db.CreateCommand();
         cmd.CommandText = """
@@ -108,17 +173,14 @@ public sealed class ImageIndex : IDisposable
         fts.ExecuteNonQuery();
     }
 
-    public void Remove(long id)
-    {
-        using var cmd = _db.CreateCommand();
-        cmd.CommandText = "DELETE FROM images_fts WHERE rowid = $id; DELETE FROM images WHERE id = $id;";
-        cmd.Parameters.AddWithValue("$id", id);
-        cmd.ExecuteNonQuery();
-    }
-
     // ---- reads ----------------------------------------------------------------------------
 
     public Dictionary<string, IndexedFile> GetFiles(string source)
+    {
+        lock (_gate) return GetFilesCore(source);
+    }
+
+    Dictionary<string, IndexedFile> GetFilesCore(string source)
     {
         using var cmd = _db.CreateCommand();
         cmd.CommandText = "SELECT id, path, size, mtime FROM images WHERE source = $source";
@@ -132,7 +194,8 @@ public sealed class ImageIndex : IDisposable
 
     public IReadOnlyList<OcrLine> GetOcrLines(long id)
     {
-        var json = Scalar("SELECT ocr_json FROM images WHERE id = $id", ("$id", id)) as string;
+        string? json;
+        lock (_gate) json = Scalar(_db, "SELECT ocr_json FROM images WHERE id = $id", ("$id", id)) as string;
         return json is null ? [] : JsonSerializer.Deserialize<List<OcrLine>>(json) ?? [];
     }
 
@@ -142,6 +205,11 @@ public sealed class ImageIndex : IDisposable
     /// An empty query returns the most recent images.
     /// </summary>
     public List<SearchHit> Search(string query, int limit = 60)
+    {
+        lock (_gate) return SearchCore(query, limit);
+    }
+
+    List<SearchHit> SearchCore(string query, int limit)
     {
         var q = SearchQuery.Parse(query);
         var where = new List<string>();
@@ -209,38 +277,44 @@ public sealed class ImageIndex : IDisposable
 
     public IndexStats GetStats()
     {
-        var bySource = new Dictionary<string, int>();
-        using (var cmd = _db.CreateCommand())
+        lock (_gate)
         {
-            cmd.CommandText = "SELECT source, count(*) FROM images GROUP BY source ORDER BY source";
-            using var r = cmd.ExecuteReader();
-            while (r.Read()) bySource[r.GetString(0)] = r.GetInt32(1);
+            var bySource = new Dictionary<string, int>();
+            using (var cmd = _db.CreateCommand())
+            {
+                cmd.CommandText = "SELECT source, count(*) FROM images GROUP BY source ORDER BY source";
+                using var r = cmd.ExecuteReader();
+                while (r.Read()) bySource[r.GetString(0)] = r.GetInt32(1);
+            }
+            return new IndexStats(
+                Convert.ToInt32(Scalar(_db, "SELECT count(*) FROM images")),
+                Convert.ToInt32(Scalar(_db, "SELECT count(*) FROM images_fts WHERE length(text) > 0")),
+                Convert.ToInt32(Scalar(_db, "SELECT count(*) FROM images WHERE status = 'error'")),
+                bySource);
         }
-        return new IndexStats(
-            Convert.ToInt32(Scalar("SELECT count(*) FROM images")),
-            Convert.ToInt32(Scalar("SELECT count(*) FROM images_fts WHERE length(text) > 0")),
-            Convert.ToInt32(Scalar("SELECT count(*) FROM images WHERE status = 'error'")),
-            bySource);
     }
 
     // ---- helpers --------------------------------------------------------------------------
 
-    void Exec(string sql)
+    static void Exec(SqliteConnection db, string sql)
     {
-        using var cmd = _db.CreateCommand();
+        using var cmd = db.CreateCommand();
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
     }
 
-    object? Scalar(string sql, params (string Name, object Value)[] args)
+    static object? Scalar(SqliteConnection db, string sql, params (string Name, object Value)[] args)
     {
-        using var cmd = _db.CreateCommand();
+        using var cmd = db.CreateCommand();
         cmd.CommandText = sql;
         foreach (var (name, value) in args) cmd.Parameters.AddWithValue(name, value);
         return cmd.ExecuteScalar();
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose()
+    {
+        lock (_gate) _db.Dispose();
+    }
 }
 
 /// <summary>Parsed form of the search box text.</summary>

@@ -132,8 +132,7 @@ public sealed partial class MainWindow : Window
     void SetIndexStatus(string status)
     {
         _indexStatus = status;
-        IndexStats stats;
-        lock (_searchIndex) stats = _searchIndex.GetStats(); // a few COUNT(*)s — cheap enough for the UI thread
+        var stats = _searchIndex.GetStats(); // a few COUNT(*)s — cheap enough for the UI thread
         StatusText.Text = $"{stats.Images:N0} images · {stats.WithText:N0} with text · {_indexStatus}" +
                           (_hotkey.IsRegistered ? $" · {_config.Hotkey} to summon" : $" · hotkey {_config.Hotkey} unavailable");
     }
@@ -153,7 +152,7 @@ public sealed partial class MainWindow : Window
         List<SearchHit> hits;
         try
         {
-            hits = await Task.Run(() => { lock (_searchIndex) return _searchIndex.Search(query, limit: 120); });
+            hits = await Task.Run(() => _searchIndex.Search(query, limit: 120));
         }
         catch (Exception ex)
         {
@@ -260,8 +259,7 @@ public sealed partial class MainWindow : Window
             .Where(t => t.Length >= 2).ToList();
         if (terms.Count == 0) return;
 
-        IReadOnlyList<Core.Ocr.OcrLine> lines;
-        lock (_searchIndex) lines = _searchIndex.GetOcrLines(id);
+        var lines = _searchIndex.GetOcrLines(id);
 
         var accent = (Windows.UI.Color)Application.Current.Resources["SystemAccentColor"];
         var stroke = Math.Max(2, PreviewSurface.Width / 400);

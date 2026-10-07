@@ -58,25 +58,42 @@ public sealed class Indexer(GlimpseConfig config, ImageIndex index)
             }
 
             // Files that vanished since the last run.
-            using var tx = index.BeginTransaction();
-            foreach (var gone in known.Values.Where(k => !seen.Contains(k.Path) && !File.Exists(k.Path)))
-            {
-                index.Remove(gone.Id);
-                removed++;
-            }
-            tx.Commit();
+            var gone = known.Values.Where(k => !seen.Contains(k.Path) && !File.Exists(k.Path)).Select(k => k.Id).ToList();
+            index.RemoveMany(gone);
+            removed += gone.Count;
         }
 
         // Newest first: the screenshot you're hunting for is usually recent.
         work.Sort((a, b) => b.File.LastWriteTimeUtc.CompareTo(a.File.LastWriteTimeUtc));
-        var (indexed, failed) = await OcrAndStoreAsync(work, progress, ct);
 
-        return new IndexReport(scanned, indexed, unchanged, removed, failed, skippedCloud, sw.Elapsed);
+        await _runLock.WaitAsync(ct);
+        try
+        {
+            var (indexed, failed) = await OcrAndStoreAsync(work, progress, ct);
+            return new IndexReport(scanned, indexed, unchanged, removed, failed, skippedCloud, sw.Elapsed);
+        }
+        finally
+        {
+            _runLock.Release();
+        }
     }
 
-    /// <summary>Index specific files (used by the folder watcher).</summary>
-    public Task<(int Indexed, int Failed)> IndexFilesAsync(IEnumerable<(string Path, Source Source)> files, CancellationToken ct = default) =>
-        OcrAndStoreAsync(files.Select(f => (new FileInfo(f.Path), f.Source)).Where(f => f.Item1.Exists).ToList(), null, ct);
+    /// <summary>Index specific files (used by the folder watcher). Waits for a running full scan to finish.</summary>
+    public async Task<(int Indexed, int Failed)> IndexFilesAsync(IEnumerable<(string Path, Source Source)> files, CancellationToken ct = default)
+    {
+        await _runLock.WaitAsync(ct);
+        try
+        {
+            return await OcrAndStoreAsync(files.Select(f => (new FileInfo(f.Path), f.Source)).Where(f => f.Item1.Exists).ToList(), null, ct);
+        }
+        finally
+        {
+            _runLock.Release();
+        }
+    }
+
+    // One OCR pass at a time, so the watcher and a full scan don't OCR the same new file twice.
+    readonly SemaphoreSlim _runLock = new(1, 1);
 
     async Task<(int Indexed, int Failed)> OcrAndStoreAsync(List<(FileInfo File, Source Source)> work, IProgress<IndexProgress>? progress, CancellationToken ct)
     {
@@ -100,10 +117,8 @@ public sealed class Indexer(GlimpseConfig config, ImageIndex index)
             void Flush()
             {
                 if (batch.Count == 0) return;
-                using var tx = index.BeginTransaction();
-                foreach (var (file, source, page, error) in batch)
-                    index.Upsert(file.FullName, source.Name, file.Length, file.LastWriteTimeUtc, page, error);
-                tx.Commit();
+                index.UpsertBatch(batch.Select(b =>
+                    new IndexEntry(b.File.FullName, b.Source.Name, b.File.Length, b.File.LastWriteTimeUtc, b.Page, b.Error)));
                 batch.Clear();
             }
         });
