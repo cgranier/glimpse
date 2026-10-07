@@ -326,6 +326,14 @@ public sealed partial class SettingsWindow : Window
         };
     }
 
+    /// <summary>The welcome screen's "download the visual model now".</summary>
+    public void StartModelDownload()
+    {
+        if (_download is not null || _runtime.ModelInstalled) return;
+        ModelButton.StartBringIntoView();
+        OnModelButton(ModelButton, new RoutedEventArgs());
+    }
+
     async void OnModelButton(object sender, RoutedEventArgs e)
     {
         if (_download is not null)

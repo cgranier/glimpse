@@ -55,6 +55,9 @@ public sealed partial class GlimpseConfig
         DefaultIgnoreCondition = JsonIgnoreCondition.Never,
     };
 
+    /// <summary>True when this session created the config: a fresh install, so the app shows its welcome.</summary>
+    public static bool CreatedThisSession { get; private set; }
+
     public static GlimpseConfig Load()
     {
         if (File.Exists(ConfigPath))
@@ -62,6 +65,7 @@ public sealed partial class GlimpseConfig
 
         var config = CreateDefault();
         config.Save();
+        CreatedThisSession = true;
         return config;
     }
 

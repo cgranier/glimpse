@@ -115,9 +115,7 @@ public sealed class SearchEngine(ImageIndex index, ClipModel? clip)
             if (after is not null && set.Mtimes[i] < after) continue;
             if (before is not null && set.Mtimes[i] >= before) continue;
 
-            var v = set.Vector(i);
-            float dot = 0;
-            for (var j = 0; j < v.Length; j++) dot += v[j] * query[j];
+            var dot = Dot(set.Vector(i), query);
             if (dot >= minScore) scores.Add((set.Ids[i], dot));
         }
         if (scores.Count == 0) return [];
@@ -125,6 +123,19 @@ public sealed class SearchEngine(ImageIndex index, ClipModel? clip)
         scores.Sort((a, b) => b.Score.CompareTo(a.Score));
         var floor = scores[0].Score - window;
         return scores.TakeWhile(s => s.Score >= floor).Take(limit).ToList();
+    }
+
+    /// <summary>SIMD dot product (vectors are unit length, so this is cosine similarity).</summary>
+    static float Dot(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
+    {
+        var sum = System.Numerics.Vector<float>.Zero;
+        var width = System.Numerics.Vector<float>.Count;
+        var i = 0;
+        for (; i <= a.Length - width; i += width)
+            sum += new System.Numerics.Vector<float>(a[i..]) * new System.Numerics.Vector<float>(b[i..]);
+        var dot = System.Numerics.Vector.Sum(sum);
+        for (; i < a.Length; i++) dot += a[i] * b[i];
+        return dot;
     }
 
     EmbeddingSet? Embeddings()

@@ -15,6 +15,7 @@ try
         "index" => await Index(rest),
         "embed" => await Embed(),
         "model" => await Model(),
+        "bench" => Bench(),
         "tokens" => Tokens(string.Join(' ', rest)), // debug: CLIP token ids
         "search" or "s" => Search(string.Join(' ', rest)),
         "ocr" => await Ocr(rest),
@@ -111,6 +112,57 @@ static async Task<int> Model()
     return 0;
 }
 
+/// <summary>Search latency on a warm engine, as the app runs it (model and embeddings loaded once).</summary>
+static int Bench()
+{
+    var config = GlimpseConfig.Load();
+    using var index = new ImageIndex();
+    using var clip = OpenClip(config);
+    var engine = new SearchEngine(index, clip);
+    var stats = index.GetStats();
+    Console.WriteLine($"{stats.Images:N0} images, {stats.WithText:N0} with text, {stats.Embedded:N0} embedded");
+
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    engine.Search("~warm up");   // loads the text encoder + all embeddings
+    Console.WriteLine($"cold start (model + {stats.Embedded:N0} vectors): {sw.ElapsedMilliseconds} ms");
+
+    string[] text = ["moca", "invoice", "error", "password reset", "localhost:3000", "in:notes claude"];
+    string[] hybrid = ["network diagram", "bar chart", "home router setup", "receipt"];
+    string[] visual = ["~network diagram", "~dark dashboard", "~photo of a cat", "~spreadsheet"];
+    void Measure(string label, string[] queries, int rounds = 20)
+    {
+        var times = new List<double>();
+        foreach (var q in queries) engine.Search(q); // warm
+        for (var r = 0; r < rounds; r++)
+            foreach (var q in queries)
+            {
+                sw.Restart();
+                engine.Search(q, 60);
+                times.Add(sw.Elapsed.TotalMilliseconds);
+            }
+        times.Sort();
+        Console.WriteLine($"{label,-8} median {times[times.Count / 2],6:F1} ms   p95 {times[(int)(times.Count * 0.95)],6:F1} ms   ({times.Count} searches)");
+    }
+    var textOnly = new SearchEngine(index, clip: null);
+    void MeasureOn(SearchEngine e, string label, string[] queries) { var keep = engine; engine = e; Measure(label, queries); engine = keep; }
+    MeasureOn(textOnly, "text", text);
+    if (clip is not null)
+    {
+        Measure("text+vis", text);   // what the app does when visual search is on: every query also asks CLIP
+        Measure("hybrid", hybrid);
+        Measure("visual", visual);
+        var embedded = index.LoadEmbeddings(clip.Name);
+        if (embedded.Count > 0) Measure("similar", [$"like:{embedded.Ids[embedded.Count / 2]}"]);
+
+        sw.Restart();
+        for (var i = 0; i < 20; i++) clip.EmbedText($"query number {i}");
+        Console.WriteLine($"CLIP text encoder alone: {sw.Elapsed.TotalMilliseconds / 20:F1} ms per query");
+    }
+    Console.WriteLine($"index on disk: {new FileInfo(GlimpseConfig.DatabasePath).Length / 1048576.0:F1} MB " +
+                      $"({new FileInfo(GlimpseConfig.DatabasePath).Length / 1024.0 / Math.Max(1, stats.Images):F1} KB per image)");
+    return 0;
+}
+
 static int Tokens(string text)
 {
     var dir = GlimpseConfig.Load().VisualModelPath!;
@@ -196,6 +248,7 @@ static int Help()
           glimpse-cli search <query>       e.g.  moca network  ·  ~network diagram  ·  in:notes after:2026-05 invoice  ·  like:1234
           glimpse-cli ocr <file>           OCR a single image and print the text
           glimpse-cli stats                index size and per-source counts
+          glimpse-cli bench                search latency on this machine (build with -c Release)
           glimpse-cli sources              list configured folders
         """);
     return 0;

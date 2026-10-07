@@ -48,6 +48,12 @@ public partial class App : Application
         }
 
         _window = new MainWindow();
+        if (_window.IsFirstRun)
+        {
+            _window.StartHidden(); // the welcome screen comes first; the main window opens when it's done
+            _window.ShowWelcome();
+            return;
+        }
         if (hidden) _window.StartHidden();
         else _window.Activate();
         if (Environment.GetCommandLineArgs().Contains("--settings", StringComparer.OrdinalIgnoreCase)) _window.OpenSettings();

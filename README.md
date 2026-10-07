@@ -1,17 +1,67 @@
-# Glimpse
+<p align="center">
+  <img src="src/Glimpse.App/Assets/glimpse.png" width="96" alt="Glimpse logo" />
+</p>
 
-Find any screenshot by the text in it. Press **Win+Alt+S**, type a few letters of something you remember
-seeing ("moca", "invoice 2024", "in:notes network"), and matching images show up with the words outlined.
+<h1 align="center">Glimpse</h1>
 
-Windows take on [gyotaku](https://github.com/xevrion/gyotaku), plus visual search. Everything stays local: OCR is the engine
-built into Windows (`Windows.Media.Ocr`), the index is a SQLite FTS5 table with the trigram tokenizer, so
-any 3+ character fragment matches anywhere in a word.
+<p align="center">
+  <b>Find any screenshot by the text in it — or by what it looks like.</b><br/>
+  Press <kbd>Win</kbd>+<kbd>Alt</kbd>+<kbd>S</kbd>, type a few letters you remember seeing, and it's there.
+</p>
 
+<p align="center">
+  <a href="../../releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/cgranier/glimpse?include_prereleases&label=release&color=4f8cff" /></a>
+  <a href="../../releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/cgranier/glimpse/total?color=4f8cff" /></a>
+  <a href="../../actions/workflows/release.yml"><img alt="Build" src="https://img.shields.io/github/actions/workflow/status/cgranier/glimpse/release.yml?label=build" /></a>
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/github/license/cgranier/glimpse?color=blue" /></a>
+  <br/>
+  <img alt="Windows 10 and 11" src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white" />
+  <img alt=".NET 9" src="https://img.shields.io/badge/.NET-9-512BD4?logo=dotnet&logoColor=white" />
+  <img alt="WinUI 3" src="https://img.shields.io/badge/UI-WinUI%203-0078D4" />
+  <img alt="100% local" src="https://img.shields.io/badge/privacy-100%25%20local-2ea44f" />
+</p>
+
+<!-- Screenshot: save it as docs/screenshot.png, then replace this comment with:
+<p align="center"><img src="docs/screenshot.png" width="860" alt="Glimpse finding a network diagram" /></p>
+-->
+
+You took a screenshot of that error message, that network diagram, that receipt. You remember what was
+in it, not what it was called or when. Glimpse reads every image in your folders, so you can just type
+what you remember: **"moca"**, **"invoice 2024"**, **"in:notes network"**. Or describe it — **"network
+diagram"**, **"dark dashboard"** — and it finds images that *look* like that, even with no matching words.
+
+- **Text in images:** every screenshot, photo and diagram is read with the OCR built into Windows; any
+  3-letter fragment matches, and the matched words are outlined on the preview
+- **Search by look:** a CLIP model running on your GPU (or CPU) understands what images show;
+  <kbd>Ctrl</kbd>+<kbd>M</kbd> finds images similar to the selected one
+- **Grab what you found:** <kbd>Ctrl</kbd>+<kbd>C</kbd> copies the image, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> copies its text
+- **Always ready:** lives in the tray, indexes new screenshots as they land, and plugs into PowerToys Command Palette
+- **Private:** nothing is uploaded, no account, no telemetry
+
+## By the numbers
+
+Measured on a laptop (Core i9-10980HK, RTX 2080 Super Max-Q) with **10,038 images** indexed
+(screenshots, notes attachments, Downloads):
+
+| | |
+|---|---|
+| Text search | **1.8 ms** median |
+| Search by look (visual) | **21 ms** median — most of it is encoding your query with CLIP |
+| Text + visual together (the default) | **27 ms** median |
+| "More like this" | **1.9 ms** median, across ~10k images |
+| Reading text from images | **~64 images/s** (9,284 in 2 min 25 s, 8 workers) |
+| Visual indexing | **~95 images/s** on the GPU (9,246 in 1 min 37 s) |
+| Index size | **~10 KB per image** (99 MB for 10k images, text + word boxes + visual vectors) |
+| Memory | **~250 MB** in the tray with visual search loaded |
+| Download | **92 MB**, nothing else to install |
+
+Search times are for the engine on a warm index; run `glimpse-cli bench` to measure your own machine.
 ## Try it
 
 Download **`Glimpse-<version>-win-x64.zip`** from [Releases](../../releases), extract it, and double-click
 **`Install.cmd`**. Test builds aren't code-signed yet, so Windows may say *"Windows protected your PC"*:
-click **More info → Run anyway**. Then press **Win+Alt+S**.
+click **More info → Run anyway**. A short welcome screen lets you pick folders and (optionally) download
+the visual search model; then press **Win+Alt+S**.
 
 - Installs for your user only (`%LOCALAPPDATA%\Programs\Glimpse`), no admin, no .NET install needed
 - Windows 10 1809+ / Windows 11, x64; a DirectX 12 GPU speeds up visual search but isn't required
@@ -19,7 +69,12 @@ click **More info → Run anyway**. Then press **Win+Alt+S**.
 - Nothing leaves your PC; the only network access is the optional visual-model download
 - Optional: `Glimpse-CmdPal-<version>-win-x64.zip` adds Glimpse to PowerToys Command Palette (needs Developer Mode)
 
-## Layout
+## How it works
+
+OCR is the engine built into Windows (`Windows.Media.Ocr`). The index is SQLite: an FTS5 table with the
+trigram tokenizer (so any 3+ character fragment matches anywhere in a word) plus CLIP ViT-B/16 image
+embeddings, compared in memory with SIMD. Results merge exact text hits first, then loose text and visual
+matches interleaved (reciprocal rank fusion). Inspired by [gyotaku](https://github.com/xevrion/gyotaku) for Linux.
 
 ```
 src/Glimpse.Core   OCR, SQLite index, incremental indexer, folder watcher
@@ -146,6 +201,6 @@ MIT, see [LICENSE](LICENSE). Bundled components and their licenses: [THIRD-PARTY
 - [x] Copy text (Ctrl+Shift+T, also in Command Palette)
 - [x] GitHub releases: self-contained zip, per-user installer/uninstaller
 - [ ] Code signing (SmartScreen), signed MSIX for the Command Palette extension, auto-update
-- [ ] First-run welcome: pick folders, offer the visual model
+- [x] First-run welcome: pick folders, offer the visual model, show the shortcut
 - [ ] Clipboard-only snips (Win+Shift+S without auto-save)
 - [ ] OCR + embed several GIF frames, not just the first

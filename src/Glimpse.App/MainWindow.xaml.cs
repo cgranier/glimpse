@@ -23,6 +23,9 @@ namespace Glimpse.App;
 public sealed partial class MainWindow : Window
 {
     readonly GlimpseRuntime _runtime = new(GlimpseConfig.Load());
+    // After _runtime: loading the config is what tells us this is a fresh install.
+    readonly bool _firstRun = GlimpseConfig.CreatedThisSession
+                              || Environment.GetCommandLineArgs().Contains("--welcome", StringComparer.OrdinalIgnoreCase);
     readonly IpcServer _ipc;
     readonly TrayIcon _tray;
     GlobalHotkey _hotkey;
@@ -98,7 +101,28 @@ public sealed partial class MainWindow : Window
         Root.KeyboardAccelerators.Add(settingsKey);
 
         _ = RunSearchAsync("");
-        _ = CatchUpIndexAsync();
+        if (!_firstRun) _ = CatchUpIndexAsync(); // on first run, indexing waits for the welcome screen's folders
+    }
+
+    // ---- first run ------------------------------------------------------------------------
+
+    public bool IsFirstRun => _firstRun;
+
+    public void ShowWelcome() =>
+        new WelcomeWindow(_runtime.Config.Clone(), _hotkey.IsRegistered, OnWelcomeDone).Activate();
+
+    async void OnWelcomeDone(WelcomeChoices choices)
+    {
+        AutoStart.Set(choices.StartWithWindows);
+        var result = await Task.Run(() => _runtime.Apply(choices.Config));
+        OnApplied(result);                                 // re-registers a changed shortcut; re-indexes if folders changed
+        if (!result.IndexingChanged) _ = CatchUpIndexAsync(); // folders as proposed: start the first index here
+        Show();
+        if (choices.DownloadModel)
+        {
+            ShowSettings();
+            _settings?.StartModelDownload();
+        }
     }
 
     /// <summary>Wraps a UI-thread operation so it can be awaited from a background thread.</summary>
