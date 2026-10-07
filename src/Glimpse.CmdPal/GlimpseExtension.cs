@@ -32,7 +32,7 @@ public sealed partial class GlimpseCommandsProvider : CommandProvider
 
         _commands =
         [
-            new CommandItem(new SearchPage())
+            new CommandItem(new SearchPage(id: "Glimpse.Search"))
             {
                 Title = "Glimpse",
                 Subtitle = "Find screenshots and images by their text or how they look",
@@ -52,9 +52,19 @@ public sealed partial class GlimpseCommandsProvider : CommandProvider
 /// </summary>
 internal sealed partial class SearchFallback : FallbackCommandItem
 {
+    // One page, re-armed per keystroke, with a fixed id: the palette stores fallback settings by
+    // command id, and a fresh anonymous command each run showed up as a new "Glimpse" entry every time.
+    readonly SearchPage _page;
+
     public SearchFallback()
-        : base(new NoOpCommand(), "Search images", "Glimpse.Search.Fallback")
+        : this(new SearchPage(id: "Glimpse.Search.Fallback"))
     {
+    }
+
+    SearchFallback(SearchPage page)
+        : base(page, "Search images", "Glimpse.Search.Fallback")
+    {
+        _page = page;
         Icon = Glimpse.Icon;
         Title = "";
     }
@@ -66,7 +76,7 @@ internal sealed partial class SearchFallback : FallbackCommandItem
             Title = ""; // empty title hides the fallback
             return;
         }
-        Command = new SearchPage(query.Trim());
+        _page.Reset(query.Trim());
         Title = $"Search images for “{query.Trim()}”";
         Subtitle = "Glimpse";
     }

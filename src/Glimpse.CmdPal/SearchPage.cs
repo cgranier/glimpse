@@ -19,8 +19,13 @@ internal sealed partial class SearchPage : DynamicListPage, IDisposable
     IListItem[] _items = [];
     bool _started;
 
-    public SearchPage(string initialQuery = "")
+    /// <param name="id">
+    /// Stable command id. Command Palette keys pins, aliases and fallback settings by it; leaving it
+    /// empty makes the palette invent a new one every time the extension starts.
+    /// </param>
+    public SearchPage(string initialQuery = "", string id = "")
     {
+        Id = id;
         Icon = Glimpse.Icon;
         Title = "Glimpse";
         Name = "Search images";
@@ -52,6 +57,16 @@ internal sealed partial class SearchPage : DynamicListPage, IDisposable
     {
         if (oldSearch != newSearch) Search(newSearch);
     }
+
+    /// <summary>Re-arm with a new query (the fallback reuses one page as you type on the palette home).</summary>
+    public void Reset(string query)
+    {
+        _pending?.Cancel();
+        _items = [];
+        _started = false;
+        SetSearchNoUpdate(query);
+    }
+
     void Search(string query)
     {
         _pending?.Cancel();
@@ -106,8 +121,9 @@ internal sealed partial class SearchPage : DynamicListPage, IDisposable
             Details = new Details
             {
                 Title = name,
-                HeroImage = new IconInfo(hit.Path),
-                Body = string.IsNullOrWhiteSpace(hit.Snippet) ? "_No text in this image._" : hit.Snippet,
+                // HeroImage renders at icon size; a markdown image fills the pane's width.
+                Body = $"![{name}]({new Uri(hit.Path).AbsoluteUri}?--x-cmdpal-fit=fit)\n\n" +
+                       (string.IsNullOrWhiteSpace(hit.Snippet) ? "_No text in this image._" : hit.Snippet),
                 Size = ContentSize.Large,
                 Metadata =
                 [
