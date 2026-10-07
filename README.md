@@ -12,7 +12,8 @@ any 3+ character fragment matches anywhere in a word.
 ```
 src/Glimpse.Core   OCR, SQLite index, incremental indexer, folder watcher
 src/Glimpse.Cli    `glimpse` command: index / search / ocr / stats / sources
-src/Glimpse.App    WinUI 3 search window (unpackaged, Mica, global hotkey)
+src/Glimpse.App    WinUI 3 search window (unpackaged, Mica, global hotkey, tray, pipe server)
+src/Glimpse.CmdPal PowerToys Command Palette extension (MSIX, talks to the app over a named pipe)
 ```
 
 ## Install
@@ -63,6 +64,28 @@ foreach ($f in "vocab.json","merges.txt","onnx/text_model_quantized.onnx","onnx/
 Without it, visual search is simply off. The app embeds new images after each OCR pass; from the CLI run
 `glimpse embed`.
 
+## Command Palette
+
+`src/Glimpse.CmdPal` is a [PowerToys Command Palette](https://learn.microsoft.com/windows/powertoys/command-palette/overview)
+extension: type **Glimpse** in the palette (Win+Alt+Space) for a live thumbnail grid with a details pane.
+Enter opens, **Ctrl+Enter copies the image**, Ctrl+K for copy path / show in folder / more like this /
+open in Glimpse. A filter dropdown switches to visual only. Typing 3+ characters on the palette's home
+also offers *Search images for "…"* under Fallbacks.
+
+```powershell
+pwsh scripts/install-cmdpal.ps1              # build + register (needs Developer Mode, no signing)
+pwsh scripts/install-cmdpal.ps1 -Uninstall
+```
+
+Tip: give it an alias in Command Palette → Settings → Extensions → Glimpse (e.g. `ss`), then
+`ss moca` jumps straight to results.
+
+How it fits together: the extension is an MSIX-packaged COM server (that's how the palette loads
+extensions). It doesn't open the index itself; it asks the running Glimpse app over a per-user named
+pipe (`Glimpse.Core/Ipc/GlimpseIpc.cs`, compiled into both). The app answers from its warm search engine
+and includes 256px thumbnails as bytes, because packaged apps get a virtualized view of AppData and
+can't read the thumbnail cache by path.
+
 ## Search syntax
 
 | Query                  | Meaning                                       |
@@ -94,7 +117,7 @@ Index lives next to it in `index.db` (about 45 MB for 8k images).
 
 - [x] Visual search (CLIP embeddings via ONNX) — "network diagram", "dark dashboard"
 - [x] Tray icon + start with Windows
-- [ ] Command Palette extension (`ss moca`)
+- [x] Command Palette extension (`ss moca`)
 - [ ] Settings page (sources, hotkey) in the app
 - [ ] Clipboard-only snips (Win+Shift+S without auto-save)
 - [ ] OCR + embed several GIF frames, not just the first

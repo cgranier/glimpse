@@ -32,6 +32,7 @@ public sealed partial class MainWindow : Window
     readonly ClipModel? _clip;              // null when the visual model isn't installed
     readonly EmbeddingIndexer? _embedder;
     readonly SearchEngine _engine;
+    readonly IpcServer _ipc;
     readonly GlobalHotkey _hotkey;
     readonly TrayIcon _tray;
     bool _quitting;
@@ -101,9 +102,32 @@ public sealed partial class MainWindow : Window
             if (e.WindowActivationState != WindowActivationState.Deactivated) SearchBox.Focus(FocusState.Programmatic);
         };
 
+        // The Command Palette extension searches through the app over a named pipe.
+        _ipc = new IpcServer(_engine, OnUiThread(CopyImageAsync), query => DispatcherQueue.TryEnqueue(() =>
+        {
+            if (query is not null) SearchBox.Text = query;
+            Show();
+        }));
+        _ipc.Start();
+
+        // Load the CLIP text encoder now, so the first search (here or from Command Palette) doesn't pay for it.
+        if (_clip is not null) _ = Task.Run(() => _clip.EmbedText("warm up"));
+
         _ = RunSearchAsync("");
         _ = CatchUpIndexAsync();
     }
+
+    /// <summary>Wraps a UI-thread operation so it can be awaited from a background thread.</summary>
+    Func<string, Task> OnUiThread(Func<string, Task> action) => arg =>
+    {
+        var done = new TaskCompletionSource();
+        DispatcherQueue.TryEnqueue(async () =>
+        {
+            try { await action(arg); done.SetResult(); }
+            catch (Exception ex) { done.SetException(ex); }
+        });
+        return done.Task;
+    };
 
     // ---- window lifecycle -----------------------------------------------------------------
 
@@ -153,6 +177,7 @@ public sealed partial class MainWindow : Window
 
     void Shutdown()
     {
+        _ipc.Dispose();
         _tray.Dispose();
         _hotkey.Dispose();
         _watcher.Dispose();
@@ -389,14 +414,19 @@ public sealed partial class MainWindow : Window
         if (SearchBox.FocusState != FocusState.Unfocused && SearchBox.SelectionLength > 0) return;
         args.Handled = true;
         if (Selected is not { } item) return;
+        await CopyImageAsync(item.Hit.Path);
+        CountText.Text = "image copied";
+    }
 
-        var file = await StorageFile.GetFileFromPathAsync(item.Hit.Path);
+    /// <summary>Puts the image on the clipboard both as a bitmap and as a file. Must run on the UI thread.</summary>
+    static async Task CopyImageAsync(string path)
+    {
+        var file = await StorageFile.GetFileFromPathAsync(path);
         var data = new DataPackage { RequestedOperation = DataPackageOperation.Copy };
         data.SetBitmap(RandomAccessStreamReference.CreateFromFile(file)); // paste into chat, docs, Obsidian
         data.SetStorageItems([file]);                                     // paste into Explorer
         Clipboard.SetContent(data);
         Clipboard.Flush();
-        CountText.Text = "image copied";
     }
 
     void OnVisualOnlyToggled(object sender, RoutedEventArgs e) => _ = RunSearchAsync(SearchBox.Text);
