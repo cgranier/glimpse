@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="Glimpse.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Glimpse.App"
+    Title="Glimpse">
+
+    <Window.SystemBackdrop>
+        <MicaBackdrop Kind="BaseAlt" />
+    </Window.SystemBackdrop>
+
+    <Grid x:Name="Root" KeyboardAcceleratorPlacementMode="Hidden">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="40" />   <!-- title bar -->
+            <RowDefinition Height="Auto" /> <!-- search -->
+            <RowDefinition Height="*" />    <!-- results + preview -->
+            <RowDefinition Height="Auto" /> <!-- status -->
+        </Grid.RowDefinitions>
+
+        <Grid.KeyboardAccelerators>
+            <KeyboardAccelerator Key="Escape" Invoked="OnEscape" />
+            <KeyboardAccelerator Modifiers="Control" Key="F" Invoked="OnFocusSearch" />
+            <KeyboardAccelerator Modifiers="Control" Key="L" Invoked="OnFocusSearch" />
+            <KeyboardAccelerator Modifiers="Control" Key="C" Invoked="OnCopyImage" />
+            <KeyboardAccelerator Modifiers="Control,Shift" Key="C" Invoked="OnCopyPath" />
+            <KeyboardAccelerator Modifiers="Control" Key="E" Invoked="OnReveal" />
+            <KeyboardAccelerator Modifiers="Control" Key="Q" Invoked="OnQuit" />
+        </Grid.KeyboardAccelerators>
+
+        <!-- Custom title bar (content extends under it) -->
+        <Grid x:Name="TitleBar" Padding="16,0,140,0">
+            <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                <Image x:Name="TitleIcon" Width="16" Height="16" />
+                <TextBlock Text="Glimpse" Style="{StaticResource CaptionTextBlockStyle}" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Search -->
+        <Grid Grid.Row="1" Padding="20,4,20,12" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="SearchBox"
+                     PlaceholderText="Search text in your screenshots…   in:notes   after:2026-05"
+                     FontSize="20" Padding="14,10"
+                     TextChanged="OnSearchChanged"
+                     KeyDown="OnSearchKeyDown" />
+            <TextBlock x:Name="CountText" Grid.Column="1" VerticalAlignment="Center"
+                       Style="{StaticResource CaptionTextBlockStyle}"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+        </Grid>
+
+        <!-- Results + preview -->
+        <Grid Grid.Row="2" Padding="12,0,20,0" ColumnSpacing="16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="3*" MinWidth="340" />
+                <ColumnDefinition Width="4*" />
+            </Grid.ColumnDefinitions>
+
+            <GridView x:Name="Results"
+                      SelectionMode="Single"
+                      IsItemClickEnabled="True"
+                      ItemClick="OnResultClick"
+                      SelectionChanged="OnSelectionChanged"
+                      DoubleTapped="OnResultDoubleTapped"
+                      KeyDown="OnResultsKeyDown"
+                      ContainerContentChanging="OnContainerContentChanging">
+                <GridView.ItemTemplate>
+                    <DataTemplate x:DataType="local:ResultItem">
+                        <StackPanel Width="200" Padding="6" Spacing="6">
+                            <Border Height="120" CornerRadius="6"
+                                    Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}">
+                                <Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="UniformToFill"
+                                       HorizontalAlignment="Center" VerticalAlignment="Top" />
+                            </Border>
+                            <TextBlock local:Highlight.Text="{x:Bind Snippet}"
+                                       Style="{StaticResource CaptionTextBlockStyle}"
+                                       TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{x:Bind Meta}" FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                       TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                    </DataTemplate>
+                </GridView.ItemTemplate>
+            </GridView>
+
+            <!-- Preview with matched words outlined -->
+            <Grid Grid.Column="1" RowSpacing="10" Padding="0,0,0,12">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Border CornerRadius="8" Padding="8"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                    <Grid>
+                        <TextBlock x:Name="EmptyPreview" Text="Type to search. Enter opens, Ctrl+C copies the image."
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                        <Viewbox Stretch="Uniform" StretchDirection="DownOnly">
+                            <Grid x:Name="PreviewSurface">
+                                <Image x:Name="PreviewImage" Stretch="Fill" />
+                                <Canvas x:Name="PreviewOverlay" />
+                            </Grid>
+                        </Viewbox>
+                    </Grid>
+                </Border>
+                <StackPanel Grid.Row="1" Spacing="2">
+                    <TextBlock x:Name="PreviewPath" Style="{StaticResource BodyStrongTextBlockStyle}"
+                               TextTrimming="CharacterEllipsis" IsTextSelectionEnabled="True" />
+                    <TextBlock x:Name="PreviewMeta" Style="{StaticResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+            </Grid>
+        </Grid>
+
+        <!-- Status -->
+        <Grid Grid.Row="3" Padding="20,6"
+              Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}">
+            <TextBlock x:Name="StatusText" Style="{StaticResource CaptionTextBlockStyle}"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            <TextBlock HorizontalAlignment="Right" Style="{StaticResource CaptionTextBlockStyle}"
+                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                       Text="Enter open · Ctrl+C copy image · Ctrl+Shift+C copy path · Ctrl+E show in folder · Esc hide" />
+        </Grid>
+    </Grid>
+</Window>
