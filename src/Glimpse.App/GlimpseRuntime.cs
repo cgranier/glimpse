@@ -57,7 +57,8 @@ public sealed class GlimpseRuntime : IDisposable
         Config = next;
         next.Save();
         if (indexing) BuildIndexing();
-        if (visual || indexing) BuildVisual(); // the embedder reads Workers from the config too
+        if (visual) BuildVisual();
+        else if (indexing && Clip is not null) Embedder = new EmbeddingIndexer(next, WriteIndex, Clip); // reads Workers; keep the loaded model
         if (forgotten > 0) Engine.InvalidateVisual();
         return new ApplyResult(indexing, visual, hotkey, forgotten);
     }

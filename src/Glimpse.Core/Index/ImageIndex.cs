@@ -41,7 +41,7 @@ public sealed class ImageIndex : IDisposable
     public const char MatchStart = '\u0001';
     public const char MatchEnd = '\u0002';
 
-    const int SchemaVersion = 2;
+    const int SchemaVersion = 3;
     const int SQLITE_CORRUPT = 11, SQLITE_NOTADB = 26;
 
     // A SqliteConnection must never be used by two threads at once (the app's startup scan and folder
@@ -121,6 +121,10 @@ public sealed class ImageIndex : IDisposable
                 model       TEXT NOT NULL,
                 vec         BLOB NOT NULL
             );
+
+            -- v3: lets GetStats count real embeddings from the index instead of reading every vector.
+            CREATE INDEX IF NOT EXISTS embeddings_ok ON embeddings(image_id) WHERE length(vec) > 0;
+            CREATE INDEX IF NOT EXISTS images_status ON images(status);
             """);
         Exec(db, $"PRAGMA user_version = {SchemaVersion}");
     }

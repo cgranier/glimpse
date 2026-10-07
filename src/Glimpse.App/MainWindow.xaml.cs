@@ -188,14 +188,43 @@ public sealed partial class MainWindow : Window
 
     void OnSettingsClick(object sender, RoutedEventArgs e) => ShowSettings();
 
-    /// <summary>Settings changed something: rebuild what depends on it and catch the index up.</summary>
-    void ApplySettings(GlimpseConfig next)
+    GlimpseConfig? _pendingConfig;
+    bool _applying;
+
+    /// <summary>
+    /// Settings changed something: rebuild what depends on it and catch the index up. Each config is
+    /// complete, so if changes arrive while one is applying, only the newest needs applying next.
+    /// Runs off the UI thread: forgetting a removed folder can touch thousands of rows.
+    /// </summary>
+    async void ApplySettings(GlimpseConfig next)
     {
-        var result = _runtime.Apply(next);
+        _pendingConfig = next;
+        if (_applying) return;
+        _applying = true;
+        try
+        {
+            while (_pendingConfig is { } config)
+            {
+                _pendingConfig = null;
+                OnApplied(await Task.Run(() => _runtime.Apply(config)));
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log(ex);
+        }
+        finally
+        {
+            _applying = false;
+        }
+    }
+
+    void OnApplied(GlimpseRuntime.ApplyResult result)
+    {
         if (result.HotkeyChanged)
         {
             _hotkey.Dispose();
-            _hotkey = RegisterHotkey(next.Hotkey);
+            _hotkey = RegisterHotkey(_runtime.Config.Hotkey);
         }
         VisualOnly.Visibility = _runtime.VisualAvailable ? Visibility.Visible : Visibility.Collapsed;
         if (!_runtime.VisualAvailable) VisualOnly.IsChecked = false;
@@ -208,8 +237,7 @@ public sealed partial class MainWindow : Window
     void OnModelDownloaded()
     {
         _runtime.ReloadVisual();
-        ApplySettings(_runtime.Config.Clone()); // refresh UI state
-        _ = CatchUpIndexAsync();                 // embeds everything with the new model
+        OnApplied(new GlimpseRuntime.ApplyResult(IndexingChanged: false, VisualChanged: true, HotkeyChanged: false, ImagesForgotten: 0));
     }
 
     async Task RebuildIndexAsync()
@@ -289,16 +317,63 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    IndexStats? _stats;
+    DateTime _statsAt;
+    bool _statsRunning, _statsDirty;
+
+    /// <summary>Called on every indexing progress tick, so it only re-renders; the counts refresh in the background.</summary>
     void SetIndexStatus(string status)
     {
         _indexStatus = status;
-        var stats = _runtime.SearchIndex.GetStats(); // a few COUNT(*)s — cheap enough for the UI thread
-        var visual = _runtime.VisualAvailable ? $"{stats.Embedded:N0} visual" : "visual off";
+        RenderStatus();
+        RefreshStatsSoon();
+    }
+
+    void RenderStatus()
+    {
         var hotkey = _runtime.Config.Hotkey;
-        StatusText.Text = $"{stats.Images:N0} images · {stats.WithText:N0} with text · {visual} · {_indexStatus}" +
+        var counts = _stats is { } s
+            ? $"{s.Images:N0} images · {s.WithText:N0} with text · {(_runtime.VisualAvailable ? $"{s.Embedded:N0} visual" : "visual off")} · "
+            : "";
+        StatusText.Text = counts + _indexStatus +
                           (_hotkey.IsRegistered ? $" · {hotkey} to summon" : $" · hotkey {hotkey} unavailable");
-        _tray.Tooltip = $"Glimpse — {stats.Images:N0} images · {_indexStatus}";
-        _settings?.RefreshStats();
+        _tray.Tooltip = $"Glimpse — {(_stats is { } t ? $"{t.Images:N0} images · " : "")}{_indexStatus}";
+    }
+
+    /// <summary>
+    /// Recount at most once a second, off the UI thread, and push the result to the status bar and Settings.
+    /// Requests that arrive mid-count are coalesced into one more count afterwards, so the final numbers are right.
+    /// </summary>
+    async void RefreshStatsSoon()
+    {
+        if (_statsRunning)
+        {
+            _statsDirty = true;
+            return;
+        }
+        _statsRunning = true;
+        try
+        {
+            do
+            {
+                _statsDirty = false;
+                var wait = TimeSpan.FromSeconds(1) - (DateTime.UtcNow - _statsAt);
+                if (wait > TimeSpan.Zero) await Task.Delay(wait);
+                _stats = await Task.Run(_runtime.SearchIndex.GetStats);
+                _statsAt = DateTime.UtcNow;
+                RenderStatus();
+                _settings?.UpdateStats(_stats);
+            }
+            while (_statsDirty);
+        }
+        catch (Exception ex)
+        {
+            App.Log(ex);
+        }
+        finally
+        {
+            _statsRunning = false;
+        }
     }
 
     // ---- search ---------------------------------------------------------------------------

@@ -231,7 +231,7 @@
                         <FontIcon Glyph="&#xE8F1;" Style="{StaticResource CardIcon}" />
                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
                             <TextBlock Text="Index" />
-                            <TextBlock x:Name="IndexStats" Style="{StaticResource CardDescription}" />
+                            <TextBlock x:Name="IndexStatsText" Style="{StaticResource CardDescription}" />
                         </StackPanel>
                         <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                             <Button Content="Re-index now" Click="OnReindex" />

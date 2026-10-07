@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using Glimpse.Core;
+using Glimpse.Core.Index;
 using Glimpse.Core.Visual;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
@@ -63,10 +64,14 @@ public sealed partial class SettingsWindow : Window
 
         Load();
         _ = MeasureThumbnailsAsync();
+        _ = Task.Run(_runtime.SearchIndex.GetStats).ContinueWith(t => UpdateStats(t.Result), TaskScheduler.FromCurrentSynchronizationContext());
         Closed += (_, _) => _download?.Cancel();
     }
 
-    GlimpseConfig Config => _runtime.Config;
+    // The window's own copy is the source of truth for what it shows. Applying happens in the background,
+    // so reading the runtime's config right after a change would still show the old state.
+    GlimpseConfig? _draft;
+    GlimpseConfig Config => _draft ??= _runtime.Config.Clone();
 
     /// <summary>Fills every control from the current config without triggering change handlers.</summary>
     void Load()
@@ -88,7 +93,6 @@ public sealed partial class SettingsWindow : Window
             CloudSwitch.IsOn = Config.HydrateCloudFiles;
             WorkersBox.Value = Config.Workers;
             UpdateModelCard();
-            RefreshStats();
         }
         finally
         {
@@ -101,7 +105,8 @@ public sealed partial class SettingsWindow : Window
         if (_loading) return;
         var next = Config.Clone();
         edit(next);
-        _apply(next);
+        _draft = next;
+        _apply(next.Clone());
     }
 
     // ---- hotkey ---------------------------------------------------------------------------
@@ -161,19 +166,43 @@ public sealed partial class SettingsWindow : Window
 
     // ---- folders --------------------------------------------------------------------------
 
+    // Latest counts pushed by the main window (never queried from here: indexing calls in often).
+    IndexStats? _stats;
+    readonly Dictionary<string, TextBlock> _folderCounts = [];
+
     void BuildFolderList()
     {
         FolderList.Children.Clear();
+        _folderCounts.Clear();
         foreach (var source in Config.Sources) FolderList.Children.Add(FolderCard(source));
-        var stats = _runtime.SearchIndex.GetStats();
+        RenderFolderCounts();
+    }
+
+    /// <summary>New counts from the main window (at most once a second while indexing).</summary>
+    public void UpdateStats(IndexStats stats)
+    {
+        _stats = stats;
+        var db = new FileInfo(GlimpseConfig.DatabasePath);
+        var size = db.Exists ? Mb(db.Length + (new FileInfo(db.FullName + "-wal") is { Exists: true } w ? w.Length : 0)) : "—";
+        IndexStatsText.Text = $"{stats.Images:N0} images · {stats.WithText:N0} with text · {stats.Embedded:N0} visual · {stats.Errors:N0} unreadable · {size} on disk";
+        RenderFolderCounts();
+    }
+
+    void RenderFolderCounts()
+    {
+        foreach (var (name, text) in _folderCounts)
+        {
+            var count = _stats?.BySource.GetValueOrDefault(name) ?? 0;
+            text.Text = _stats is null ? "Counting…" : count > 0 ? $"{count:N0} images" : "Not indexed yet — indexing starts right away";
+        }
         FolderSummary.Text = Config.Sources.Count == 0
             ? "No folders yet: add the ones where your screenshots and images live."
-            : $"{Config.Sources.Count} folder{(Config.Sources.Count == 1 ? "" : "s")} · {stats.Images:N0} images indexed";
+            : $"{Config.Sources.Count} folder{(Config.Sources.Count == 1 ? "" : "s")}" +
+              (_stats is { } s ? $" · {s.Images:N0} images indexed" : "");
     }
 
     Border FolderCard(Source source)
     {
-        var count = _runtime.SearchIndex.GetStats().BySource.GetValueOrDefault(source.Name);
         var exists = Directory.Exists(source.Path);
 
         var name = new TextBox { Text = source.Name, Width = 150, VerticalAlignment = VerticalAlignment.Center };
@@ -210,11 +239,13 @@ public sealed partial class SettingsWindow : Window
 
         var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         text.Children.Add(new TextBlock { Text = source.Path, TextTrimming = TextTrimming.CharacterEllipsis });
-        text.Children.Add(new TextBlock
+        var countText = new TextBlock
         {
-            Text = exists ? $"{count:N0} images" : "Folder not found — it may have moved or be on a disconnected drive",
+            Text = "Folder not found — it may have moved or be on a disconnected drive",
             Style = (Style)((FrameworkElement)Content).Resources["CardDescription"],
-        });
+        };
+        if (exists) _folderCounts[source.Name] = countText; // filled in by RenderFolderCounts
+        text.Children.Add(countText);
 
         var grid = new Grid { ColumnSpacing = 12 };
         foreach (var w in new[] { GridLength.Auto, new GridLength(1, GridUnitType.Star), GridLength.Auto, GridLength.Auto, GridLength.Auto, GridLength.Auto })
@@ -362,15 +393,6 @@ public sealed partial class SettingsWindow : Window
         if (double.IsNaN(args.NewValue)) { sender.Value = Config.Workers; return; }
         var workers = (int)Math.Clamp(Math.Round(args.NewValue), 1, Environment.ProcessorCount);
         if (workers != Config.Workers) Change(c => c.Workers = workers);
-    }
-
-    /// <summary>Called by the main window whenever indexing status changes.</summary>
-    public void RefreshStats()
-    {
-        var s = _runtime.SearchIndex.GetStats();
-        var db = new FileInfo(GlimpseConfig.DatabasePath);
-        var size = db.Exists ? Mb(db.Length + (new FileInfo(db.FullName + "-wal") is { Exists: true } w ? w.Length : 0)) : "—";
-        IndexStats.Text = $"{s.Images:N0} images · {s.WithText:N0} with text · {s.Embedded:N0} visual · {s.Errors:N0} unreadable · {size} on disk";
     }
 
     async void OnReindex(object sender, RoutedEventArgs e) => await _reindex();
