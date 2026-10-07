@@ -6,7 +6,8 @@
     <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>glimpse</AssemblyName>
+    <!-- Not "glimpse": Windows names are case-insensitive, and the app is Glimpse.exe in the same folder. -->
+    <AssemblyName>glimpse-cli</AssemblyName>
     <RootNamespace>Glimpse.Cli</RootNamespace>
   </PropertyGroup>
 

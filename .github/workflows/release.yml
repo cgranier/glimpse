@@ -1,0 +1,55 @@
+name: Release
+
+# Push a tag like v0.5.0 (or v0.6.0-beta.1 for a pre-release) to build and publish a GitHub release.
+# "Run workflow" builds the same zips as a downloadable artifact without publishing anything.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version for a test build (e.g. 0.5.0-test)'
+        required: true
+        default: '0.0.0-test'
+
+permissions:
+  contents: write   # create the release and upload its assets
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          $v = if ('${{ github.event_name }}' -eq 'push') { '${{ github.ref_name }}'.TrimStart('v') } else { '${{ inputs.version }}' }
+          "value=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Build release zips
+        shell: pwsh
+        run: ./packaging/build-release.ps1 -Version '${{ steps.version.outputs.value }}' -Output artifacts
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: glimpse-${{ steps.version.outputs.value }}
+          path: artifacts/*
+
+      - name: Publish GitHub release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Glimpse ${{ steps.version.outputs.value }}
+          body_path: packaging/release-notes.md
+          generate_release_notes: true
+          prerelease: ${{ contains(steps.version.outputs.value, '-') }}
+          files: |
+            artifacts/*.zip
+            artifacts/SHA256SUMS.txt

@@ -1,0 +1,5 @@
+# Windows project: check out with CRLF, store normalized.
+* text=auto eol=crlf
+
+*.png binary
+*.ico binary

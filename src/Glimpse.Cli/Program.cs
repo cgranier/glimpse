@@ -35,7 +35,7 @@ static async Task<int> Index(string[] args)
     var only = args.Length == 0 ? null : config.Sources.Where(s => args.Contains(s.Name, StringComparer.OrdinalIgnoreCase)).ToList();
     if (only is { Count: 0 })
     {
-        Console.Error.WriteLine($"no source named {string.Join(", ", args)} (see `glimpse sources`)");
+        Console.Error.WriteLine($"no source named {string.Join(", ", args)} (see `glimpse-cli sources`)");
         return 1;
     }
 
@@ -107,7 +107,7 @@ static async Task<int> Model()
     Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
     var progress = new Progress<(long Done, long Total)>(p => Console.Write($"\r  {p.Done / 1048576} / {p.Total / 1048576} MB   "));
     await ModelCatalog.DownloadAsync(model, dir, progress, cts.Token);
-    Console.WriteLine($"\ninstalled — run `glimpse embed` to index visually");
+    Console.WriteLine($"\ninstalled — run `glimpse-cli embed` to index visually");
     return 0;
 }
 
@@ -188,15 +188,15 @@ static int Sources()
 static int Help()
 {
     Console.WriteLine("""
-        glimpse — find images by the text in them
+        glimpse-cli — find images by the text in them or how they look
 
-          glimpse index [source...]    scan sources and OCR new/changed images
-          glimpse model                download the visual search model (~392 MB, once)
-          glimpse embed                CLIP-embed images for visual search (after index)
-          glimpse search <query>       e.g.  moca network  ·  ~network diagram  ·  in:notes after:2026-05 invoice  ·  like:1234
-          glimpse ocr <file>           OCR a single image and print the text
-          glimpse stats                index size and per-source counts
-          glimpse sources              list configured folders
+          glimpse-cli index [source...]    scan sources and OCR new/changed images
+          glimpse-cli model                download the visual search model (~392 MB, once)
+          glimpse-cli embed                CLIP-embed images for visual search (after index)
+          glimpse-cli search <query>       e.g.  moca network  ·  ~network diagram  ·  in:notes after:2026-05 invoice  ·  like:1234
+          glimpse-cli ocr <file>           OCR a single image and print the text
+          glimpse-cli stats                index size and per-source counts
+          glimpse-cli sources              list configured folders
         """);
     return 0;
 }

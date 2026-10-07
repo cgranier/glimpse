@@ -7,16 +7,28 @@ Windows take on [gyotaku](https://github.com/xevrion/gyotaku), plus visual searc
 built into Windows (`Windows.Media.Ocr`), the index is a SQLite FTS5 table with the trigram tokenizer, so
 any 3+ character fragment matches anywhere in a word.
 
+## Try it
+
+Download **`Glimpse-<version>-win-x64.zip`** from [Releases](../../releases), extract it, and double-click
+**`Install.cmd`**. Test builds aren't code-signed yet, so Windows may say *"Windows protected your PC"*:
+click **More info → Run anyway**. Then press **Win+Alt+S**.
+
+- Installs for your user only (`%LOCALAPPDATA%\Programs\Glimpse`), no admin, no .NET install needed
+- Windows 10 1809+ / Windows 11, x64; a DirectX 12 GPU speeds up visual search but isn't required
+- Uninstall from *Settings → Apps → Installed apps* (you choose whether to keep the index)
+- Nothing leaves your PC; the only network access is the optional visual-model download
+- Optional: `Glimpse-CmdPal-<version>-win-x64.zip` adds Glimpse to PowerToys Command Palette (needs Developer Mode)
+
 ## Layout
 
 ```
 src/Glimpse.Core   OCR, SQLite index, incremental indexer, folder watcher
-src/Glimpse.Cli    `glimpse` command: index / embed / model / search / ocr / stats / sources
+src/Glimpse.Cli    `glimpse-cli` command: index / embed / model / search / ocr / stats / sources
 src/Glimpse.App    WinUI 3 search window (unpackaged, Mica, global hotkey, tray, pipe server)
 src/Glimpse.CmdPal PowerToys Command Palette extension (MSIX, talks to the app over a named pipe)
 ```
 
-## Install
+## Install from source
 
 ```powershell
 pwsh scripts/install.ps1                # Release build → %LOCALAPPDATA%\Programs\Glimpse, start with Windows, launch in tray
@@ -52,9 +64,9 @@ loose text hits and visual matches interleaved (reciprocal rank fusion). Visual 
 "≈ looks like" badge. **Visual** toggle (Ctrl+T) or a `~` prefix = visual only. **Ctrl+M** = more like the
 selected image.
 
-The model is a one-time ~392 MB download (Settings → Visual search → **Download**, or `glimpse model`)
+The model is a one-time ~392 MB download (Settings → Visual search → **Download**, or `glimpse-cli model`)
 into `%LOCALAPPDATA%\Glimpse\models\clip-vit-b16`, with resumable, size-checked files. Without it, visual
-search is simply off. The app embeds new images after each OCR pass; from the CLI run `glimpse embed`.
+search is simply off. The app embeds new images after each OCR pass; from the CLI run `glimpse-cli embed`.
 
 ## Command Palette
 
@@ -111,6 +123,20 @@ First run defaults to the Windows *Screenshots* and *Downloads* known folders (f
 or relocation). Everything is stored in `%LOCALAPPDATA%\Glimpse` (`config.json`, `index.db`, `models\`,
 `thumbs\`, `glimpse.log`).
 
+## Releasing
+
+```powershell
+pwsh packaging/build-release.ps1 -Version 0.5.0   # local: artifacts\*.zip + SHA256SUMS.txt
+git tag v0.5.0; git push origin v0.5.0            # CI: builds the same zips and publishes a GitHub release
+```
+
+Tags with a suffix (`v0.6.0-beta.1`) publish as pre-releases. *Actions → Release → Run workflow* builds the
+zips as an artifact without publishing. Release notes start from `packaging/release-notes.md`.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Bundled components and their licenses: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
 ## Roadmap
 
 - [x] Visual search (CLIP embeddings via ONNX) — "network diagram", "dark dashboard"
@@ -118,5 +144,8 @@ or relocation). Everything is stored in `%LOCALAPPDATA%\Glimpse` (`config.json`,
 - [x] Command Palette extension (`ss moca`)
 - [x] Settings page (folders, hotkey, visual model download, indexing)
 - [x] Copy text (Ctrl+Shift+T, also in Command Palette)
+- [x] GitHub releases: self-contained zip, per-user installer/uninstaller
+- [ ] Code signing (SmartScreen), signed MSIX for the Command Palette extension, auto-update
+- [ ] First-run welcome: pick folders, offer the visual model
 - [ ] Clipboard-only snips (Win+Shift+S without auto-save)
 - [ ] OCR + embed several GIF frames, not just the first
