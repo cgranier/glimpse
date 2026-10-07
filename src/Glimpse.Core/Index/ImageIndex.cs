@@ -195,6 +195,84 @@ public sealed class ImageIndex : IDisposable
         fts.ExecuteNonQuery();
     }
 
+    /// <summary>
+    /// A file or folder was renamed/moved: re-point its entries, keeping the OCR text and embeddings
+    /// (the pixels didn't change). Returns how many images moved; 0 if the old path wasn't indexed.
+    /// </summary>
+    public int MovePath(string oldPath, string newPath, string source)
+    {
+        lock (_gate)
+        {
+            using var tx = _db.BeginTransaction();
+            DeleteWherePath(newPath); // something already indexed under the new name is replaced
+
+            // A single file…
+            using (var cmd = _db.CreateCommand())
+            {
+                cmd.CommandText = "UPDATE images SET path = $new, source = $source WHERE path = $old RETURNING id";
+                cmd.Parameters.AddWithValue("$old", oldPath);
+                cmd.Parameters.AddWithValue("$new", newPath);
+                cmd.Parameters.AddWithValue("$source", source);
+                if (cmd.ExecuteScalar() is long id)
+                {
+                    using var fts = _db.CreateCommand();
+                    fts.CommandText = "UPDATE images_fts SET name = $name WHERE rowid = $id";
+                    fts.Parameters.AddWithValue("$name", System.IO.Path.GetFileNameWithoutExtension(newPath));
+                    fts.Parameters.AddWithValue("$id", id);
+                    fts.ExecuteNonQuery();
+                    tx.Commit();
+                    return 1;
+                }
+            }
+
+            // …or a folder: everything under it moves along (file names, so the FTS rows, are unchanged).
+            using (var cmd = _db.CreateCommand())
+            {
+                var oldPrefix = oldPath.TrimEnd('\\') + "\\";
+                cmd.CommandText = """
+                    UPDATE images SET path = $newPrefix || substr(path, length($oldPrefix) + 1), source = $source
+                    WHERE lower(substr(path, 1, length($oldPrefix))) = lower($oldPrefix)
+                    """;
+                cmd.Parameters.AddWithValue("$oldPrefix", oldPrefix);
+                cmd.Parameters.AddWithValue("$newPrefix", newPath.TrimEnd('\\') + "\\");
+                cmd.Parameters.AddWithValue("$source", source);
+                var moved = cmd.ExecuteNonQuery();
+                tx.Commit();
+                return moved;
+            }
+        }
+    }
+
+    /// <summary>A file or folder was deleted: forget it (and, for a folder, everything under it).</summary>
+    public int RemovePath(string path)
+    {
+        lock (_gate)
+        {
+            using var tx = _db.BeginTransaction();
+            var removed = DeleteWherePath(path);
+            tx.Commit();
+            return removed;
+        }
+    }
+
+    int DeleteWherePath(string path)
+    {
+        using var cmd = _db.CreateCommand();
+        cmd.CommandText = """
+            CREATE TEMP TABLE IF NOT EXISTS doomed (id INTEGER PRIMARY KEY);
+            DELETE FROM doomed;
+            INSERT INTO doomed SELECT id FROM images
+                WHERE path = $path OR lower(substr(path, 1, length($prefix))) = lower($prefix);
+            DELETE FROM images_fts WHERE rowid IN (SELECT id FROM doomed);
+            DELETE FROM embeddings WHERE image_id IN (SELECT id FROM doomed);
+            DELETE FROM images WHERE id IN (SELECT id FROM doomed);
+            """;
+        cmd.Parameters.AddWithValue("$path", path);
+        cmd.Parameters.AddWithValue("$prefix", path.TrimEnd('\\') + "\\");
+        cmd.ExecuteNonQuery();
+        return Convert.ToInt32(Scalar(_db, "SELECT changes()"));
+    }
+
     /// <summary>Forgets every image from a source (it was removed in Settings).</summary>
     public int RemoveSource(string source)
     {

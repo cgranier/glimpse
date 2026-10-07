@@ -26,6 +26,9 @@ public sealed class GlimpseRuntime : IDisposable
     /// <summary>The folder watcher indexed this many new images.</summary>
     public event Action<int>? NewImagesIndexed;
 
+    /// <summary>Indexed images were renamed, moved or deleted.</summary>
+    public event Action? ImagesChanged;
+
     public GlimpseRuntime(GlimpseConfig config)
     {
         Config = config;
@@ -72,6 +75,11 @@ public sealed class GlimpseRuntime : IDisposable
         Indexer = new Indexer(Config, WriteIndex);
         _watcher = new FolderWatcher(Config, Indexer);
         _watcher.Indexed += n => NewImagesIndexed?.Invoke(n);
+        _watcher.Changed += () =>
+        {
+            Engine.InvalidateVisual();
+            ImagesChanged?.Invoke();
+        };
     }
 
     void BuildVisual()

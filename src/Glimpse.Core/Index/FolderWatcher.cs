@@ -19,6 +19,9 @@ public sealed class FolderWatcher : IDisposable
 
     public event Action<int>? Indexed;
 
+    /// <summary>Images were renamed, moved or deleted (no new text to read, but results are stale).</summary>
+    public event Action? Changed;
+
     public FolderWatcher(GlimpseConfig config, Indexer indexer)
     {
         _indexer = indexer;
@@ -30,14 +33,53 @@ public sealed class FolderWatcher : IDisposable
             var w = new FileSystemWatcher(source.Path)
             {
                 IncludeSubdirectories = source.Recursive,
-                NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size,
+                NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size,
                 InternalBufferSize = 64 * 1024,
             };
             w.Created += (_, e) => Queue(e.FullPath, source);
             w.Changed += (_, e) => Queue(e.FullPath, source);
-            w.Renamed += (_, e) => Queue(e.FullPath, source);
+            w.Renamed += (_, e) => OnRenamed(e.OldFullPath, e.FullPath, source);
+            w.Deleted += (_, e) => OnDeleted(e.FullPath);
             w.EnableRaisingEvents = true;
             _watchers.Add(w);
+        }
+    }
+
+    void OnRenamed(string oldPath, string newPath, Source source)
+    {
+        try
+        {
+            var isFolder = Directory.Exists(newPath);
+            if (!isFolder && !_extensions.Contains(Path.GetExtension(newPath)))
+            {
+                // Renamed to something that isn't an image (photo.png → photo.png.bak).
+                if (_indexer.Forget(oldPath) > 0) Changed?.Invoke();
+                return;
+            }
+            if (_indexer.Move(oldPath, newPath, source) > 0)
+            {
+                Changed?.Invoke();
+                return;
+            }
+        }
+        catch
+        {
+            // Fall through: reading it fresh is always correct, just slower.
+        }
+        // Not indexed under its old name (e.g. ShareX writes a temp file, then renames it to .png).
+        Queue(newPath, source);
+    }
+
+    void OnDeleted(string path)
+    {
+        try
+        {
+            _pending.TryRemove(path, out _);
+            if (_indexer.Forget(path) > 0) Changed?.Invoke();
+        }
+        catch
+        {
+            // The next full scan removes it anyway.
         }
     }
 

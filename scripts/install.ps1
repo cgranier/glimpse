@@ -14,6 +14,9 @@ $staging = Join-Path ([IO.Path]::GetTempPath()) "glimpse-publish-$PID"
 Write-Host "Publishing Release build..."
 dotnet publish "$repo\src\Glimpse.App" -c Release -p:Platform=x64 -o $staging --nologo -v q
 if ($LASTEXITCODE -ne 0) { throw "publish failed" }
+# glimpse-cli.exe next to the app, as in the release zip.
+dotnet publish "$repo\src\Glimpse.Cli" -c Release -r win-x64 --no-self-contained -o $staging --nologo -v q
+if ($LASTEXITCODE -ne 0) { throw "CLI publish failed" }
 
 # Stop the running copy (it holds the exe and the hotkey), then swap files.
 Get-Process Glimpse -ErrorAction SilentlyContinue | Stop-Process

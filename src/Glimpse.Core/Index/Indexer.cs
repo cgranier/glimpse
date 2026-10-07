@@ -92,6 +92,12 @@ public sealed class Indexer(GlimpseConfig config, ImageIndex index)
         }
     }
 
+    /// <summary>A file or folder was renamed: keep its text and embeddings under the new path.</summary>
+    public int Move(string oldPath, string newPath, Source source) => index.MovePath(oldPath, newPath, source.Name);
+
+    /// <summary>A file or folder was deleted.</summary>
+    public int Forget(string path) => index.RemovePath(path);
+
     // One OCR pass at a time, so the watcher and a full scan don't OCR the same new file twice.
     readonly SemaphoreSlim _runLock = new(1, 1);
 

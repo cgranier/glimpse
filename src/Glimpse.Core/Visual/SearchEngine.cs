@@ -30,7 +30,31 @@ public sealed class SearchEngine(ImageIndex index, ClipModel? clip)
         lock (_setGate) _set = null;
     }
 
-    public List<SearchHit> Search(string query, int limit = 120)
+    public List<SearchHit> Search(string query, int limit = 120) => DropMissing(SearchCore(query, limit));
+
+    /// <summary>
+    /// Self-healing: files renamed or deleted while Glimpse wasn't watching (or missed by the watcher)
+    /// leave stale entries. Drop them from the results and the index, so nobody gets an image that
+    /// can't open. Only when the file's drive is present: an unplugged drive or offline share keeps its index.
+    /// </summary>
+    List<SearchHit> DropMissing(List<SearchHit> hits)
+    {
+        var missing = hits.Where(h => !File.Exists(h.Path) && Path.GetPathRoot(h.Path) is { } root && Directory.Exists(root)).ToList();
+        if (missing.Count == 0) return hits;
+        try
+        {
+            index.RemoveMany(missing.Select(m => m.Id));
+            InvalidateVisual();
+        }
+        catch
+        {
+            // Not fatal: they're still hidden from these results, and the next full scan removes them.
+        }
+        var gone = missing.Select(m => m.Id).ToHashSet();
+        return hits.Where(h => !gone.Contains(h.Id)).ToList();
+    }
+
+    List<SearchHit> SearchCore(string query, int limit)
     {
         var text = query.TrimStart();
         var visualOnly = text.StartsWith('~');

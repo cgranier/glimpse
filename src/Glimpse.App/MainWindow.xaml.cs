@@ -59,6 +59,12 @@ public sealed partial class MainWindow : Window
         _searchDebounce.Tick += (_, _) => _ = RunSearchAsync(SearchBox.Text);
 
         VisualOnly.Visibility = _runtime.VisualAvailable ? Visibility.Visible : Visibility.Collapsed;
+        // Renamed/moved/deleted images: refresh what's on screen so nothing points at an old path.
+        _runtime.ImagesChanged += () => DispatcherQueue.TryEnqueue(() =>
+        {
+            _ = RunSearchAsync(SearchBox.Text);
+            RefreshStatsSoon();
+        });
         _runtime.NewImagesIndexed += n => DispatcherQueue.TryEnqueue(async () =>
         {
             SetIndexStatus($"indexed {n} new image{(n == 1 ? "" : "s")}");
@@ -512,7 +518,9 @@ public sealed partial class MainWindow : Window
         var hit = item.Hit;
         var bmp = new BitmapImage();
         if (hit.Width > 2000) bmp.DecodePixelWidth = 2000;
-        bmp.ImageFailed += (_, e) => PreviewMeta.Text = "can't open: " + e.ErrorMessage;
+        bmp.ImageFailed += (_, e) => PreviewMeta.Text = File.Exists(hit.Path)
+            ? $"Windows can't display this image ({e.ErrorMessage})."
+            : "This image was moved, renamed or deleted since it was indexed. Search again to refresh.";
 
         if (hit.Width > 0)
         {
