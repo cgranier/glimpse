@@ -66,9 +66,9 @@ public sealed class FolderWatcher : IDisposable
                 return;
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Fall through: reading it fresh is always correct, just slower.
+            Diagnostics.Report(ex); // fall through: reading it fresh is always correct, just slower
         }
         // Not indexed under its old name (e.g. ShareX writes a temp file, then renames it to .png).
         Queue(newPath, source);
@@ -85,9 +85,9 @@ public sealed class FolderWatcher : IDisposable
             _pending.TryRemove(path, out _);
             if (_indexer.Forget(path) > 0) Changed?.Invoke();
         }
-        catch
+        catch (Exception ex)
         {
-            // The next full scan removes it anyway.
+            Diagnostics.Report(ex); // the next full scan removes it anyway
         }
     }
 
@@ -111,9 +111,10 @@ public sealed class FolderWatcher : IDisposable
             var (indexed, _) = await _indexer.IndexFilesAsync(batch);
             if (indexed > 0) Indexed?.Invoke(indexed);
         }
-        catch
+        catch (Exception ex)
         {
-            // A file still being written fails to decode; it'll be picked up on the next Changed event or full scan.
+            // Unreadable files don't throw (they're recorded as failed), so this is a real problem: say so.
+            Diagnostics.Report(ex);
         }
         finally
         {

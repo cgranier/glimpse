@@ -15,6 +15,7 @@ public partial class App : Application
     {
         InitializeComponent();
         UnhandledException += (_, e) => Log(e.Exception);
+        Core.Diagnostics.Error = Log;
         TaskScheduler.UnobservedTaskException += (_, e) => { Log(e.Exception); e.SetObserved(); };
         if (Environment.GetEnvironmentVariable("GLIMPSE_TRACE") == "1")
             AppDomain.CurrentDomain.FirstChanceException += (_, e) => Log(e.Exception);

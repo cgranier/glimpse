@@ -151,7 +151,11 @@ public sealed class Indexer(GlimpseConfig config, ImageIndex index)
                         engines.Add(engine);
                     }
                     await results.Writer.WriteAsync((item.File, item.Source, page, error), token);
-                    progress?.Report(new IndexProgress("ocr", Interlocked.Increment(ref done), work.Count, item.File.Name));
+                    // Count outside the ?. call: with no progress reporter (the folder watcher), "progress?.Report(...)"
+                    // skips evaluating its arguments too, so the increment never happened and the watcher saw 0
+                    // images indexed, never announcing them (no visual pass, no refresh).
+                    var count = Interlocked.Increment(ref done);
+                    progress?.Report(new IndexProgress("ocr", count, work.Count, item.File.Name));
                 });
         }
         finally
