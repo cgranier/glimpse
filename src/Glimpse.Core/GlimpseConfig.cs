@@ -41,7 +41,12 @@ public sealed partial class GlimpseConfig
     /// <summary>Concurrent OCR workers. Windows OCR is CPU-bound; half the cores keeps the machine responsive.</summary>
     public int Workers { get; set; } = Math.Max(1, Environment.ProcessorCount / 2);
 
+    /// <summary>
+    /// %LOCALAPPDATA%\Glimpse, or GLIMPSE_DATA_DIR when set: a separate, throwaway setup (folders, index,
+    /// settings) for demos and testing. Only one Glimpse runs at a time, so quit the regular one first.
+    /// </summary>
     public static string DataDir { get; } =
+        Environment.GetEnvironmentVariable("GLIMPSE_DATA_DIR") is { Length: > 0 } d ? d :
         System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Glimpse");
 
     public static string ConfigPath => System.IO.Path.Combine(DataDir, "config.json");
