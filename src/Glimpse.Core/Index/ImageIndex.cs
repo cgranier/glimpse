@@ -581,6 +581,16 @@ public sealed record SearchQuery(List<string> Terms, string? Source, DateTime? A
         return new SearchQuery(terms, source, after, before, like);
     }
 
+    /// <summary>
+    /// The filter part of a query (in:, after:, before:), to carry into a follow-up query such as
+    /// "more like this", so it stays within the folders and dates being searched.
+    /// </summary>
+    public static string Filters(string text) =>
+        string.Join(' ', Tokenize(text).Where(t =>
+            t.StartsWith("in:", StringComparison.OrdinalIgnoreCase) ||
+            t.StartsWith("after:", StringComparison.OrdinalIgnoreCase) ||
+            t.StartsWith("before:", StringComparison.OrdinalIgnoreCase)));
+
     /// <summary>Whitespace split, honoring "quoted phrases".</summary>
     static IEnumerable<string> Tokenize(string text)
     {

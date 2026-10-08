@@ -634,7 +634,8 @@ public sealed partial class MainWindow : Window
     {
         args.Handled = true;
         if (!_runtime.VisualAvailable || Selected is not { } item) return;
-        SearchBox.Text = $"like:{item.Hit.Id}";
+        // Keep the current filters: "more like this" while searching in:screenshots stays in screenshots.
+        SearchBox.Text = $"like:{item.Hit.Id} {SearchQuery.Filters(SearchBox.Text)}".TrimEnd();
         SearchBox.Focus(FocusState.Programmatic);
         SearchBox.SelectionStart = SearchBox.Text.Length;
     }

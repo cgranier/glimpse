@@ -84,7 +84,7 @@ internal sealed partial class SearchPage : DynamicListPage, IDisposable
                 if (cts.IsCancellationRequested) return;
 
                 _items = response is { Ok: true, Hits: { } hits }
-                    ? hits.Length > 0 ? hits.Select(ToItem).ToArray() : [Message("No matches", "Try fewer words, or the Visual filter to match by look", "\uE721")]
+                    ? hits.Length > 0 ? hits.Select(h => ToItem(h, QueryFilters(query))).ToArray() : [Message("No matches", "Try fewer words, or the Visual filter to match by look", "\uE721")]
                     : [Message("Glimpse couldn't search", response.Error ?? "unknown error", "\uE783")];
             }
             catch (OperationCanceledException) when (cts.IsCancellationRequested)
@@ -106,7 +106,11 @@ internal sealed partial class SearchPage : DynamicListPage, IDisposable
         });
     }
 
-    static ListItem ToItem(IpcHit hit)
+    /// <summary>in:/after:/before: from a query, carried into "more like this" (mirrors SearchQuery.Filters in Core).</summary>
+    static string QueryFilters(string query) => string.Join(' ', query.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+        .Where(t => t.StartsWith("in:", StringComparison.OrdinalIgnoreCase) || t.StartsWith("after:", StringComparison.OrdinalIgnoreCase) || t.StartsWith("before:", StringComparison.OrdinalIgnoreCase)));
+
+    static ListItem ToItem(IpcHit hit, string filters)
     {
         var name = Path.GetFileName(hit.Path);
         var snippet = string.IsNullOrWhiteSpace(hit.Snippet) ? name : hit.Snippet.Trim();
@@ -138,7 +142,7 @@ internal sealed partial class SearchPage : DynamicListPage, IDisposable
                 new CommandContextItem(new AppCommand("copy", hit.Path, "Copy image", "\uE8C8", "Image copied")),
                 new CommandContextItem(new CopyTextCommand(hit.Path) { Name = "Copy path" }),
                 new CommandContextItem(new RevealCommand(hit.Path)),
-                new CommandContextItem(new SearchPage($"like:{hit.Id}") { Name = "More like this" }) { Title = "More like this", Icon = new IconInfo("\uE7B3") },
+                new CommandContextItem(new SearchPage($"like:{hit.Id} {filters}".TrimEnd()) { Name = "More like this" }) { Title = "More like this", Icon = new IconInfo("\uE7B3") },
                 new CommandContextItem(new AppCommand("show", $"like:{hit.Id}", "Open in Glimpse", "\uE8A7")),
             ],
         };
