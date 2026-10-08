@@ -50,6 +50,7 @@
             <TextBox x:Name="SearchBox"
                      PlaceholderText="Text you remember, or describe what it looks like…   in:notes   after:2026-05"
                      FontSize="20" Padding="14,10"
+                     IsSpellCheckEnabled="False" IsTextPredictionEnabled="False"
                      TextChanged="OnSearchChanged"
                      KeyDown="OnSearchKeyDown" />
             <ToggleButton x:Name="VisualOnly" Grid.Column="1" VerticalAlignment="Stretch" Padding="12,0"
