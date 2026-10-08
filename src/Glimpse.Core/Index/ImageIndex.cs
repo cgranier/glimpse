@@ -21,7 +21,9 @@ public sealed record SearchHit(
     /// <summary>Snippet with matches wrapped in <see cref="ImageIndex.MatchStart"/>/<see cref="ImageIndex.MatchEnd"/>.</summary>
     string Snippet,
     /// <summary>Cosine similarity for visual matches; null for text matches.</summary>
-    float? VisualScore = null);
+    float? VisualScore = null,
+    /// <summary>The search words (or file name) matched this image's text. False for purely visual matches.</summary>
+    bool MatchedText = false);
 
 public sealed record IndexStats(int Images, int WithText, int Errors, IReadOnlyDictionary<string, int> BySource, int Embedded = 0);
 
@@ -408,7 +410,8 @@ public sealed class ImageIndex : IDisposable
             while (r.Read())
                 hits.Add(new SearchHit(r.GetInt64(0), r.GetString(1), r.GetString(2),
                     new DateTime(r.GetInt64(3), DateTimeKind.Utc).ToLocalTime(),
-                    r.GetInt32(4), r.GetInt32(5), r.IsDBNull(6) ? "" : r.GetString(6)));
+                    r.GetInt32(4), r.GetInt32(5), r.IsDBNull(6) ? "" : r.GetString(6),
+                    MatchedText: q.Terms.Count > 0)); // with no words it's just "recent images"
         }
         return hits;
     }

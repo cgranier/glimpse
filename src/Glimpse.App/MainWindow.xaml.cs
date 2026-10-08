@@ -461,7 +461,8 @@ public sealed partial class MainWindow : Window
 
         _lastQuery = query;
         _items.Clear();
-        foreach (var hit in hits) _items.Add(new ResultItem(hit));
+        var visualSearch = VisualOnly.IsChecked == true || query.TrimStart().StartsWith('~') || SearchQuery.Parse(query).Like is not null;
+        foreach (var hit in hits) _items.Add(new ResultItem(hit, visualSearch));
         CountText.Text = $"{hits.Count}{(hits.Count == 120 ? "+" : "")} results · {sw.ElapsedMilliseconds} ms";
         if (_items.Count > 0) Results.SelectedIndex = 0;
         else ShowPreview(null);

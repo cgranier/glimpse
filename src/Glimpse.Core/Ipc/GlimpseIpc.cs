@@ -28,7 +28,8 @@ public sealed record IpcHit(
     string? Thumbnail,         // cached ~256px PNG path, or null if it couldn't be made
     // The same thumbnail's bytes. Packaged apps (Command Palette) get a virtualized view of AppData and
     // can't read the cache path, so the image travels in the response instead.
-    byte[]? ThumbnailPng = null);
+    byte[]? ThumbnailPng = null,
+    bool MatchedText = false); // the words matched its text; false = found only by how it looks
 
 public sealed record IpcResponse(bool Ok, string? Error = null, IpcHit[]? Hits = null, bool VisualAvailable = false);
 

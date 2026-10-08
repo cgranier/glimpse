@@ -5,14 +5,26 @@ using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace Glimpse.App;
 
-public sealed class ResultItem(SearchHit hit) : INotifyPropertyChanged
+/// <param name="visualSearch">Visual-only (Ctrl+T, ~) or more like this (Ctrl+M): similarity is the point.</param>
+public sealed class ResultItem(SearchHit hit, bool visualSearch) : INotifyPropertyChanged
 {
     public SearchHit Hit { get; } = hit;
     public string Snippet { get; } = hit.Snippet.ReplaceLineEndings(" ");
     public string Meta { get; } = $"{hit.Source} · {hit.Modified:yyyy-MM-dd HH:mm} · {Path.GetFileName(hit.Path)}";
 
-    /// <summary>Marks visual matches, which may not contain any of the typed words.</summary>
-    public string Badge { get; } = hit.VisualScore is float s ? $"≈ looks like  ·  {s:F2}" : "";
+    public string Badge { get; } = BadgeFor(hit, visualSearch);
+
+    /// <summary>
+    /// Visual searches show the similarity score on every result. In a normal search, only results found
+    /// purely by how they look get a plain "≈ looks like", explaining why they're there without your words;
+    /// text matches get nothing.
+    /// </summary>
+    static string BadgeFor(SearchHit hit, bool visualSearch) => hit.VisualScore switch
+    {
+        float s when visualSearch => $"≈ {s:F2}",
+        not null when !hit.MatchedText => "≈ looks like",
+        _ => "",
+    };
 
     BitmapImage? _thumbnail;
     public BitmapImage? Thumbnail

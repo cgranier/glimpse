@@ -77,7 +77,8 @@ public sealed class IpcServer(GlimpseRuntime runtime, Func<string, Task> copyIma
                         h.Snippet.Replace(ImageIndex.MatchStart.ToString(), "").Replace(ImageIndex.MatchEnd.ToString(), "").ReplaceLineEndings(" "),
                         h.VisualScore,
                         thumb,
-                        thumb is null ? null : await File.ReadAllBytesAsync(thumb, ct));
+                        thumb is null ? null : await File.ReadAllBytesAsync(thumb, ct),
+                        h.MatchedText);
                 }));
                 return new IpcResponse(true, Hits: results, VisualAvailable: engine.VisualAvailable);
 

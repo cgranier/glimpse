@@ -84,7 +84,7 @@ internal sealed partial class SearchPage : DynamicListPage, IDisposable
                 if (cts.IsCancellationRequested) return;
 
                 _items = response is { Ok: true, Hits: { } hits }
-                    ? hits.Length > 0 ? hits.Select(h => ToItem(h, QueryFilters(query))).ToArray() : [Message("No matches", "Try fewer words, or the Visual filter to match by look", "\uE721")]
+                    ? hits.Length > 0 ? hits.Select(h => ToItem(h, QueryFilters(query), IsVisualSearch(query))).ToArray() : [Message("No matches", "Try fewer words, or the Visual filter to match by look", "\uE721")]
                     : [Message("Glimpse couldn't search", response.Error ?? "unknown error", "\uE783")];
             }
             catch (OperationCanceledException) when (cts.IsCancellationRequested)
@@ -110,18 +110,35 @@ internal sealed partial class SearchPage : DynamicListPage, IDisposable
     static string QueryFilters(string query) => string.Join(' ', query.Split(' ', StringSplitOptions.RemoveEmptyEntries)
         .Where(t => t.StartsWith("in:", StringComparison.OrdinalIgnoreCase) || t.StartsWith("after:", StringComparison.OrdinalIgnoreCase) || t.StartsWith("before:", StringComparison.OrdinalIgnoreCase)));
 
-    static ListItem ToItem(IpcHit hit, string filters)
+    bool IsVisualSearch(string query) =>
+        _modes.CurrentFilterId == ModeFilters.Visual || query.TrimStart().StartsWith('~')
+        || query.Split(' ', StringSplitOptions.RemoveEmptyEntries).Any(t => t.StartsWith("like:", StringComparison.OrdinalIgnoreCase));
+
+    static ListItem ToItem(IpcHit hit, string filters, bool visualSearch)
     {
         var name = Path.GetFileName(hit.Path);
         var snippet = string.IsNullOrWhiteSpace(hit.Snippet) ? name : hit.Snippet.Trim();
-        var kind = hit.VisualScore is float s ? $"looks like · {s:F2}" : "text match";
+        // Same rule as the app: scores on visual searches; otherwise only purely visual finds are marked.
+        var badge = hit.VisualScore switch
+        {
+            float s when visualSearch => $"≈ {s:F2}",
+            not null when !hit.MatchedText => "≈ looks like",
+            _ => null,
+        };
+        var kind = (hit.MatchedText, hit.VisualScore) switch
+        {
+            (true, float s) => $"text, and looks like ({s:F2})",
+            (true, null) => "text match",
+            (false, float s) => $"looks like ({s:F2})",
+            _ => "recent",
+        };
 
         return new ListItem(new OpenFileCommand(hit.Path))
         {
             Title = snippet.Length > 60 ? snippet[..57] + "…" : snippet,
             Subtitle = $"{hit.Source} · {hit.Modified:yyyy-MM-dd}",
             Icon = hit.ThumbnailPng is { } png ? IconFromPng(png) : new IconInfo(hit.Path),
-            Tags = hit.VisualScore is null ? [] : [new Tag("≈ looks like")],
+            Tags = badge is null ? [] : [new Tag(badge)],
             Details = new Details
             {
                 Title = name,
