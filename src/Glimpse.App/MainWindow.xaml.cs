@@ -554,9 +554,9 @@ public sealed partial class MainWindow : Window
 
     async void DrawMatches(long id)
     {
-        var terms = SearchQuery.Parse(_lastQuery).Terms
-            .SelectMany(t => t.Split(' ', StringSplitOptions.RemoveEmptyEntries))
-            .Where(t => t.Length >= 2).ToList();
+        // Terms as the search used them: a "quoted phrase" stays one term. Visual-only searches outline nothing.
+        if (_lastQuery.TrimStart().StartsWith('~') || VisualOnly.IsChecked == true) return;
+        var terms = SearchQuery.Parse(_lastQuery).Terms;
         if (terms.Count == 0) return;
 
         // Never touch the database on the UI thread: if indexing holds it, the window would freeze.
@@ -565,12 +565,8 @@ public sealed partial class MainWindow : Window
 
         var accent = (Windows.UI.Color)Application.Current.Resources["SystemAccentColor"];
         var stroke = Math.Max(2, PreviewSurface.Width / 400);
-        foreach (var word in lines.SelectMany(l => l.Words))
+        foreach (var word in Core.Ocr.OcrMatch.Find(lines, terms))
         {
-            if (!terms.Any(t => word.Text.Contains(t, StringComparison.OrdinalIgnoreCase)
-                             || (word.Text.Length >= 3 && t.Contains(word.Text, StringComparison.OrdinalIgnoreCase))))
-                continue;
-
             var pad = word.Height * 0.2;
             var box = new Rectangle
             {

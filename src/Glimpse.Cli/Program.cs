@@ -16,6 +16,7 @@ try
         "embed" => await Embed(),
         "model" => await Model(),
         "bench" => Bench(),
+        "outline" => Outline(rest), // debug: words the preview outlines
         "tokens" => Tokens(string.Join(' ', rest)), // debug: CLIP token ids
         "search" or "s" => Search(string.Join(' ', rest)),
         "ocr" => await Ocr(rest),
@@ -160,6 +161,19 @@ static int Bench()
     }
     Console.WriteLine($"index on disk: {new FileInfo(GlimpseConfig.DatabasePath).Length / 1048576.0:F1} MB " +
                       $"({new FileInfo(GlimpseConfig.DatabasePath).Length / 1024.0 / Math.Max(1, stats.Images):F1} KB per image)");
+    return 0;
+}
+
+/// <summary>Debug: which words the preview would outline for a query, in an indexed image (by file name).</summary>
+static int Outline(string[] args)
+{
+    if (args.Length < 2) return Help();
+    using var index = new ImageIndex();
+    var hit = index.Search($"\"{Path.GetFileNameWithoutExtension(args[0])}\"", 200)
+        .FirstOrDefault(h => Path.GetFileName(h.Path).Equals(args[0], StringComparison.OrdinalIgnoreCase));
+    if (hit is null) { Console.Error.WriteLine($"not indexed: {args[0]}"); return 1; }
+    var words = OcrMatch.Find(index.GetOcrLines(hit.Id), SearchQuery.Parse(string.Join(' ', args.Skip(1))).Terms).ToList();
+    Console.WriteLine($"{words.Count} outlined: {string.Join(" | ", words.Select(w => w.Text))}");
     return 0;
 }
 
