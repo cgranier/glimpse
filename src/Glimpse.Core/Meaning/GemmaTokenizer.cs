@@ -58,6 +58,7 @@ public sealed class GemmaTokenizer
     {
         // Starting symbols: one per character, or its bytes when the character isn't in the vocabulary.
         var ids = new List<int>(text.Length);
+        Span<byte> utf8 = stackalloc byte[4];
         foreach (var rune in text.Replace(' ', '▁').EnumerateRunes())
         {
             if (_vocab.TryGetValue(rune.ToString(), out var id))
@@ -65,7 +66,6 @@ public sealed class GemmaTokenizer
                 ids.Add(id);
                 continue;
             }
-            Span<byte> utf8 = stackalloc byte[4];
             var n = rune.EncodeToUtf8(utf8);
             for (var i = 0; i < n; i++) ids.Add(_byteTokens[utf8[i]]);
         }
