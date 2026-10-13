@@ -64,7 +64,7 @@ Search times are for the engine on a warm index; run `glimpse-cli bench` to meas
 Download **`Glimpse-<version>-win-x64.zip`** from [Releases](../../releases), extract it, and double-click
 **`Install.cmd`**. Test builds aren't code-signed yet, so Windows may say *"Windows protected your PC"*:
 click **More info → Run anyway**. A short welcome screen lets you pick folders and (optionally) download
-the visual search model; then press **Win+Alt+S**.
+the visual search and search-by-meaning models; then press **Win+Alt+S**.
 
 - Installs for your user only (`%LOCALAPPDATA%\Programs\Glimpse`), no admin, no .NET install needed
 - Windows 10 1809+ / Windows 11, x64; a DirectX 12 GPU speeds up visual search but isn't required
@@ -224,7 +224,7 @@ MIT, see [LICENSE](LICENSE). Bundled components and their licenses: [THIRD-PARTY
 - [x] Copy text (Ctrl+Shift+T, also in Command Palette)
 - [x] GitHub releases: self-contained zip, per-user installer/uninstaller
 - [ ] Code signing (SmartScreen), signed MSIX for the Command Palette extension, auto-update
-- [x] First-run welcome: pick folders, offer the visual model, show the shortcut
+- [x] First-run welcome: pick folders, offer the visual and meaning models, show the shortcut
 - [x] Search by meaning (EmbeddingGemma 2 text embeddings, int8 on the CPU)
 - [ ] EmbeddingGemma 2 image embeddings (better than CLIP in tests, but ~7 s/image on the CPU; needs a GPU path)
 - [ ] Clipboard-only snips (Win+Shift+S without auto-save)

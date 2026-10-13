@@ -11,10 +11,10 @@ using WinRT.Interop;
 namespace Glimpse.App;
 
 /// <summary>What the person chose on the welcome screen.</summary>
-public sealed record WelcomeChoices(GlimpseConfig Config, bool StartWithWindows, bool DownloadModel);
+public sealed record WelcomeChoices(GlimpseConfig Config, bool StartWithWindows, bool DownloadModel, bool DownloadMeaning = false);
 
 /// <summary>
-/// First run: confirm the folders to index, optionally fetch the visual model, learn the shortcut.
+/// First run: confirm the folders to index, optionally fetch the visual and meaning models, learn the shortcut.
 /// Indexing waits for this, so it starts on the folders actually chosen. Closing it = defaults.
 /// </summary>
 public sealed partial class WelcomeWindow : Window
@@ -41,7 +41,7 @@ public sealed partial class WelcomeWindow : Window
         var png = Path.ChangeExtension(icon, ".png");
         if (File.Exists(png)) Logo.Source = new BitmapImage(new Uri(png));
         if (AppWindow.Presenter is OverlappedPresenter p) { p.IsMaximizable = false; p.IsMinimizable = false; }
-        Resize(640, 820);
+        Resize(640, 900);
 
         foreach (var source in config.Sources) AddFolderRow(source, isChecked: true);
         UpdateStartButton();
@@ -52,7 +52,15 @@ public sealed partial class WelcomeWindow : Window
         DownloadModel.Content = installed ? "Visual search model already installed" : $"Download the visual search model now ({model.TotalSize >> 20} MB)";
         DownloadModel.IsChecked = installed;
         ModelHint.Text = "Search by what images look like (“network diagram”, “bar chart”) and find similar images. " +
-                         "It runs on this PC; the download comes from Hugging Face once. You can also do this later in Settings.";
+                         "Indexes in minutes, faster with a graphics card.";
+
+        var meaning = ModelCatalog.Meaning;
+        var meaningInstalled = ModelCatalog.IsInstalled(meaning, Path.Combine(GlimpseConfig.ModelsDir, meaning.Name));
+        DownloadMeaning.IsEnabled = !meaningInstalled;
+        DownloadMeaning.Content = meaningInstalled ? "Search-by-meaning model already installed" : $"Download the search-by-meaning model now ({meaning.TotalSize >> 20} MB)";
+        DownloadMeaning.IsChecked = meaningInstalled;
+        MeaningHint.Text = "Search the text in images by what it means, in 100+ languages: “invoice” also finds “factura”. " +
+                           "The first pass reads about 200 images a minute in the background.";
 
         if (!hotkeyWorks && FallbackHotkeys.FirstOrDefault(GlobalHotkey.IsAvailable) is { } free)
         {
@@ -174,7 +182,9 @@ public sealed partial class WelcomeWindow : Window
         if (_finished) return;
         _finished = true;
         _config.Sources = _folders.Where(f => f.Box.IsChecked == true).Select(f => f.Source).ToList();
-        _done(new WelcomeChoices(_config, AutoStartBox.IsChecked == true, DownloadModel.IsEnabled && DownloadModel.IsChecked == true));
+        _done(new WelcomeChoices(_config, AutoStartBox.IsChecked == true,
+            DownloadModel.IsEnabled && DownloadModel.IsChecked == true,
+            DownloadMeaning.IsEnabled && DownloadMeaning.IsChecked == true));
     }
 
     void Resize(int width, int height)

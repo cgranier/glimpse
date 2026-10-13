@@ -429,6 +429,13 @@ public sealed partial class SettingsWindow : Window
         };
     }
 
+    /// <summary>The welcome screen's "download the search-by-meaning model now".</summary>
+    public void StartMeaningDownload()
+    {
+        if (_meaningDownload is not null || _runtime.MeaningModelInstalled) return;
+        OnMeaningModelButton(MeaningModelButton, new RoutedEventArgs());
+    }
+
     async void OnMeaningModelButton(object sender, RoutedEventArgs e)
     {
         if (_meaningDownload is not null)

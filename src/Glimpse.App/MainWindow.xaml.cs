@@ -134,10 +134,11 @@ public sealed partial class MainWindow : Window
         OnApplied(result);                                 // re-registers a changed shortcut; re-indexes if folders changed
         if (!result.IndexingChanged) _ = CatchUpIndexAsync(); // folders as proposed: start the first index here
         Show();
-        if (choices.DownloadModel)
+        if (choices.DownloadModel || choices.DownloadMeaning)
         {
             ShowSettings();
-            _settings?.StartModelDownload();
+            if (choices.DownloadModel) _settings?.StartModelDownload();
+            if (choices.DownloadMeaning) _settings?.StartMeaningDownload();
         }
     }
 

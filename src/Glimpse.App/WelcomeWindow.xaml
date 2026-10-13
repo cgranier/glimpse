@@ -41,7 +41,7 @@
                     <Image x:Name="Logo" Width="52" Height="52" VerticalAlignment="Center" />
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="Welcome to Glimpse" Style="{StaticResource TitleTextBlockStyle}" />
-                        <TextBlock Text="Find any screenshot or image by the text in it, or by what it looks like."
+                        <TextBlock Text="Find any screenshot or image by the text in it, what that text means, or what it looks like."
                                    Style="{StaticResource BodyTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
                     </StackPanel>
                 </StackPanel>
@@ -58,12 +58,20 @@
                     </StackPanel>
                 </HyperlinkButton>
 
-                <!-- 2. Visual search -->
-                <TextBlock Text="2   Visual search (optional)" Style="{StaticResource Step}" />
+                <!-- 2. Smarter search -->
+                <TextBlock Text="2   Smarter search (optional)" Style="{StaticResource Step}" />
+                <TextBlock Style="{StaticResource Hint}" Margin="2,0,0,6"
+                           Text="Two models that run on this PC, each a one-time download from Hugging Face. Text search works without them, and you can add them later in Settings." />
                 <Border Style="{StaticResource Card}">
                     <StackPanel Spacing="2">
                         <CheckBox x:Name="DownloadModel" Content="Download the visual search model now" />
                         <TextBlock x:Name="ModelHint" Style="{StaticResource Hint}" Margin="28,0,0,0" />
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource Card}">
+                    <StackPanel Spacing="2">
+                        <CheckBox x:Name="DownloadMeaning" Content="Download the search-by-meaning model now" />
+                        <TextBlock x:Name="MeaningHint" Style="{StaticResource Hint}" Margin="28,0,0,0" />
                     </StackPanel>
                 </Border>
 
