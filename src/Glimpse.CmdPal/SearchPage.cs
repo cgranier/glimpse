@@ -118,18 +118,21 @@ internal sealed partial class SearchPage : DynamicListPage, IDisposable
     {
         var name = Path.GetFileName(hit.Path);
         var snippet = string.IsNullOrWhiteSpace(hit.Snippet) ? name : hit.Snippet.Trim();
-        // Same rule as the app: scores on visual searches; otherwise only purely visual finds are marked.
-        var badge = hit.VisualScore switch
+        // Same rule as the app: scores on visual searches; otherwise finds without your words say why they're here.
+        var badge = hit switch
         {
-            float s when visualSearch => $"≈ {s:F2}",
-            not null when !hit.MatchedText => "≈ looks like",
+            { VisualScore: float s } when visualSearch => $"≈ {s:F2}",
+            { MatchedText: true } => null,
+            { MeaningScore: not null } => "≈ related text",
+            { VisualScore: not null } => "≈ looks like",
             _ => null,
         };
-        var kind = (hit.MatchedText, hit.VisualScore) switch
+        var kind = (hit.MatchedText, hit.MeaningScore, hit.VisualScore) switch
         {
-            (true, float s) => $"text, and looks like ({s:F2})",
-            (true, null) => "text match",
-            (false, float s) => $"looks like ({s:F2})",
+            (true, _, float s) => $"text, and looks like ({s:F2})",
+            (true, _, null) => "text match",
+            (false, float m, _) => $"related text ({m:F2})",
+            (false, null, float s) => $"looks like ({s:F2})",
             _ => "recent",
         };
 

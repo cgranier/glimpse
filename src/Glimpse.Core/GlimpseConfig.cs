@@ -38,6 +38,19 @@ public sealed partial class GlimpseConfig
     public string? VisualModelPath =>
         !VisualSearch || string.IsNullOrWhiteSpace(VisualModel) ? null : System.IO.Path.Combine(ModelsDir, VisualModel);
 
+    /// <summary>
+    /// Search OCR text by meaning (EmbeddingGemma 2): "invoice" finds "factura", "login" finds "sign in".
+    /// Needs the model (Settings → Search by meaning → Download).
+    /// </summary>
+    public bool MeaningSearch { get; set; } = true;
+
+    /// <summary>Folder name under models\ holding the EmbeddingGemma ONNX files.</summary>
+    public string MeaningModel { get; set; } = Visual.ModelCatalog.Meaning.Name;
+
+    [JsonIgnore]
+    public string? MeaningModelPath =>
+        !MeaningSearch || string.IsNullOrWhiteSpace(MeaningModel) ? null : System.IO.Path.Combine(ModelsDir, MeaningModel);
+
     /// <summary>Concurrent OCR workers. Windows OCR is CPU-bound; half the cores keeps the machine responsive.</summary>
     public int Workers { get; set; } = Math.Max(1, Environment.ProcessorCount / 2);
 
@@ -89,6 +102,8 @@ public sealed partial class GlimpseConfig
         || !Extensions.SequenceEqual(other.Extensions, StringComparer.OrdinalIgnoreCase)
         || HydrateCloudFiles != other.HydrateCloudFiles
         || Workers != other.Workers;
+
+    public bool MeaningDiffers(GlimpseConfig other) => MeaningModelPath != other.MeaningModelPath;
 
     public bool VisualDiffers(GlimpseConfig other) =>
         VisualModelPath != other.VisualModelPath || UseGpu != other.UseGpu || Workers != other.Workers;

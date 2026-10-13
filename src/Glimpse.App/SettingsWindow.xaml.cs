@@ -31,12 +31,13 @@ public sealed partial class SettingsWindow : Window
     readonly Action<GlimpseConfig> _apply;
     readonly Func<Task> _reindex;
     readonly Func<Task> _rebuild;
-    readonly Action _modelDownloaded;
+    readonly Action<ModelInfo> _modelDownloaded;
     readonly ModelInfo _model = ModelCatalog.Default;
-    CancellationTokenSource? _download;
+    readonly ModelInfo _meaningModel = ModelCatalog.Meaning;
+    CancellationTokenSource? _download, _meaningDownload;
     bool _loading;
 
-    public SettingsWindow(GlimpseRuntime runtime, Action<GlimpseConfig> apply, Func<Task> reindex, Func<Task> rebuild, Action modelDownloaded)
+    public SettingsWindow(GlimpseRuntime runtime, Action<GlimpseConfig> apply, Func<Task> reindex, Func<Task> rebuild, Action<ModelInfo> modelDownloaded)
     {
         _runtime = runtime;
         _apply = apply;
@@ -59,13 +60,19 @@ public sealed partial class SettingsWindow : Window
         WorkersDescription.Text = $"How many images are read at once. More is faster but busier; this PC has {Environment.ProcessorCount} logical processors.";
         ModelSource.Content = $"{_model.DisplayName} · {_model.License} · {_model.SourceUrl.Replace("https://", "")}";
         ModelSource.NavigateUri = new Uri(_model.SourceUrl);
+        MeaningModelSource.Content = $"{_meaningModel.DisplayName} · {_meaningModel.License} · {_meaningModel.SourceUrl.Replace("https://", "")}";
+        MeaningModelSource.NavigateUri = new Uri(_meaningModel.SourceUrl);
         var version = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "dev";
         AboutVersion.Text = $"Glimpse {version.Split('+')[0]}";
 
         Load();
         _ = MeasureThumbnailsAsync();
         _ = Task.Run(_runtime.SearchIndex.GetStats).ContinueWith(t => UpdateStats(t.Result), TaskScheduler.FromCurrentSynchronizationContext());
-        Closed += (_, _) => _download?.Cancel();
+        Closed += (_, _) =>
+        {
+            _download?.Cancel();
+            _meaningDownload?.Cancel();
+        };
     }
 
     // The window's own copy is the source of truth for what it shows. Applying happens in the background,
@@ -93,6 +100,8 @@ public sealed partial class SettingsWindow : Window
             CloudSwitch.IsOn = Config.HydrateCloudFiles;
             WorkersBox.Value = Config.Workers;
             UpdateModelCard();
+            MeaningSwitch.IsOn = Config.MeaningSearch;
+            UpdateMeaningCard();
         }
         finally
         {
@@ -184,7 +193,7 @@ public sealed partial class SettingsWindow : Window
         _stats = stats;
         var db = new FileInfo(GlimpseConfig.DatabasePath);
         var size = db.Exists ? Mb(db.Length + (new FileInfo(db.FullName + "-wal") is { Exists: true } w ? w.Length : 0)) : "—";
-        IndexStatsText.Text = $"{stats.Images:N0} images · {stats.WithText:N0} with text · {stats.Embedded:N0} visual · {stats.Errors:N0} unreadable · {size} on disk";
+        IndexStatsText.Text = $"{stats.Images:N0} images · {stats.WithText:N0} with text · {stats.Embedded:N0} visual · {stats.MeaningEmbedded:N0} by meaning · {stats.Errors:N0} unreadable · {size} on disk";
         RenderFolderCounts();
     }
 
@@ -371,7 +380,7 @@ public sealed partial class SettingsWindow : Window
             _download = null;
             if (!Config.VisualSearch) Change(c => c.VisualSearch = true);
             _loading = true; VisualSwitch.IsOn = true; GpuSwitch.IsEnabled = true; _loading = false;
-            _modelDownloaded();
+            _modelDownloaded(_model);
             ModelStatus.Text = "Installed. Indexing your images visually now; this takes a few minutes.";
         }
         catch (OperationCanceledException)
@@ -389,6 +398,92 @@ public sealed partial class SettingsWindow : Window
         {
             ModelProgressPanel.Visibility = Visibility.Collapsed;
             ModelButton.Content = _runtime.ModelInstalled ? "Remove" : $"Download ({Mb(_model.TotalSize)})";
+        }
+    }
+
+    // ---- search by meaning ----------------------------------------------------------------
+
+    void OnMeaningToggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        Change(c => c.MeaningSearch = MeaningSwitch.IsOn);
+        UpdateMeaningCard();
+    }
+
+    void UpdateMeaningCard()
+    {
+        var installed = _runtime.MeaningModelInstalled;
+        MeaningModelTitle.Text = $"Model: {_meaningModel.DisplayName}";
+        if (_meaningDownload is not null)
+        {
+            MeaningModelButton.Content = "Cancel";
+            return;
+        }
+
+        MeaningModelButton.Content = installed ? "Remove" : $"Download ({Mb(_meaningModel.TotalSize)})";
+        MeaningModelStatus.Text = installed switch
+        {
+            true when !Config.MeaningSearch => "Installed. Search by meaning is off.",
+            true => "Installed · runs on the processor",
+            false => $"Not installed. One-time {Mb(_meaningModel.TotalSize)} download from Hugging Face; nothing is uploaded.",
+        };
+    }
+
+    async void OnMeaningModelButton(object sender, RoutedEventArgs e)
+    {
+        if (_meaningDownload is not null)
+        {
+            _meaningDownload.Cancel();
+            return;
+        }
+
+        var dir = Path.Combine(GlimpseConfig.ModelsDir, _meaningModel.Name);
+        if (_runtime.MeaningModelInstalled)
+        {
+            if (!await ConfirmAsync("Remove the search-by-meaning model?",
+                    $"Deletes {Mb(_meaningModel.TotalSize)} from this PC. Text search keeps working; you can download the model again any time.", "Remove"))
+                return;
+            Change(c => c.MeaningSearch = false);   // releases the model files
+            await Task.Delay(TimeSpan.FromSeconds(6));
+            try { Directory.Delete(dir, recursive: true); }
+            catch (IOException) { MeaningModelStatus.Text = "Couldn't delete every file yet; try again in a moment."; }
+            _loading = true; MeaningSwitch.IsOn = false; _loading = false;
+            UpdateMeaningCard();
+            return;
+        }
+
+        _meaningDownload = new CancellationTokenSource();
+        MeaningProgressPanel.Visibility = Visibility.Visible;
+        UpdateMeaningCard();
+        var progress = new Progress<(long Done, long Total)>(p =>
+        {
+            MeaningProgress.Value = (double)p.Done / p.Total;
+            MeaningProgressText.Text = $"{Mb(p.Done)} of {Mb(p.Total)}";
+        });
+        try
+        {
+            await Task.Run(() => ModelCatalog.DownloadAsync(_meaningModel, dir, progress, _meaningDownload.Token));
+            _meaningDownload = null;
+            if (!Config.MeaningSearch) Change(c => c.MeaningSearch = true);
+            _loading = true; MeaningSwitch.IsOn = true; _loading = false;
+            _modelDownloaded(_meaningModel);
+            MeaningModelStatus.Text = "Installed. Reading your images' text for meaning now; this takes a while the first time.";
+        }
+        catch (OperationCanceledException)
+        {
+            _meaningDownload = null;
+            MeaningModelStatus.Text = "Download cancelled. It resumes from the finished files next time.";
+        }
+        catch (Exception ex)
+        {
+            _meaningDownload = null;
+            App.Log(ex);
+            MeaningModelStatus.Text = $"Download failed: {ex.Message}";
+        }
+        finally
+        {
+            MeaningProgressPanel.Visibility = Visibility.Collapsed;
+            MeaningModelButton.Content = _runtime.MeaningModelInstalled ? "Remove" : $"Download ({Mb(_meaningModel.TotalSize)})";
         }
     }
 

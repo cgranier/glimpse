@@ -34,6 +34,8 @@ diagram"**, **"dark dashboard"** — and it finds images that *look* like that, 
   3-letter fragment matches, and the matched words are outlined on the preview
 - **Search by look:** a CLIP model running on your GPU (or CPU) understands what images show;
   <kbd>Ctrl</kbd>+<kbd>M</kbd> finds images similar to the selected one
+- **Search by meaning:** EmbeddingGemma 2 reads the text for what it *means*, in 100+ languages:
+  "invoice" also finds "factura", "to-do list" finds a checklist that never says so
 - **Grab what you found:** <kbd>Ctrl</kbd>+<kbd>C</kbd> copies the image, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> copies its text
 - **Always ready:** lives in the tray, indexes new screenshots as they land, and plugs into PowerToys Command Palette
 - **Private:** nothing is uploaded, no account, no telemetry
@@ -48,6 +50,7 @@ Measured on a laptop (Core i9-10980HK, RTX 2080 Super Max-Q) with **10,038 image
 | Text search | **1.8 ms** median |
 | Search by look (visual) | **21 ms** median — most of it is encoding your query with CLIP |
 | Text + visual together (the default) | **27 ms** median |
+| Text + visual + meaning | **54 ms** median (with the search-by-meaning model installed) |
 | "More like this" | **1.9 ms** median, across ~10k images |
 | Reading text from images | **~64 images/s** (9,284 in 2 min 25 s, 8 workers) |
 | Visual indexing | **~95 images/s** on the GPU (9,246 in 1 min 37 s) |
@@ -66,19 +69,19 @@ the visual search model; then press **Win+Alt+S**.
 - Installs for your user only (`%LOCALAPPDATA%\Programs\Glimpse`), no admin, no .NET install needed
 - Windows 10 1809+ / Windows 11, x64; a DirectX 12 GPU speeds up visual search but isn't required
 - Uninstall from *Settings → Apps → Installed apps* (you choose whether to keep the index)
-- Nothing leaves your PC; the only network access is the optional visual-model download
+- Nothing leaves your PC; the only network access is the optional model downloads
 - Optional: `Glimpse-CmdPal-<version>-win-x64.zip` adds Glimpse to PowerToys Command Palette (needs Developer Mode)
 
 ## How it works
 
 OCR is the engine built into Windows (`Windows.Media.Ocr`). The index is SQLite: an FTS5 table with the
-trigram tokenizer (so any 3+ character fragment matches anywhere in a word) plus CLIP ViT-B/16 image
-embeddings, compared in memory with SIMD. Results merge exact text hits first, then loose text and visual
-matches interleaved (reciprocal rank fusion). Inspired by [gyotaku](https://github.com/xevrion/gyotaku) for Linux.
+trigram tokenizer (so any 3+ character fragment matches anywhere in a word), CLIP ViT-B/16 image
+embeddings and EmbeddingGemma 2 text embeddings, compared in memory with SIMD. Results merge exact text hits
+first, then loose text, meaning and visual matches interleaved (reciprocal rank fusion). Inspired by [gyotaku](https://github.com/xevrion/gyotaku) for Linux.
 
 ```
 src/Glimpse.Core   OCR, SQLite index, incremental indexer, folder watcher
-src/Glimpse.Cli    `glimpse-cli` command: index / embed / model / search / ocr / stats / sources
+src/Glimpse.Cli    `glimpse-cli` command: index / embed / model [meaning] / search / ocr / stats / sources
 src/Glimpse.App    WinUI 3 search window (unpackaged, Mica, global hotkey, tray, pipe server)
 src/Glimpse.CmdPal PowerToys Command Palette extension (MSIX, talks to the app over a named pipe)
 ```
@@ -122,6 +125,25 @@ selected image.
 The model is a one-time ~392 MB download (Settings → Visual search → **Download**, or `glimpse-cli model`)
 into `%LOCALAPPDATA%\Glimpse\models\clip-vit-b16`, with resumable, size-checked files. Without it, visual
 search is simply off. The app embeds new images after each OCR pass; from the CLI run `glimpse-cli embed`.
+
+## Search by meaning
+
+OCR text matches what you typed; search by meaning matches what you *meant*. Every image with text is also
+embedded with Google's [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) (text part, int8,
+ONNX, on the CPU), so a Spanish query finds an English screenshot ("contraseña del wifi" → a Wi-Fi password
+note: 26th without meaning, 1st with it), and a description finds text that never uses its words ("to-do
+list" → a task list whose text doesn't contain those words: 43rd → 2nd). Matches found this way, without your words, carry a "≈ related text"
+badge, and exact text hits still come first.
+
+On 27 test queries against a 10,079-image library (6,600 with text), the right image landed first for
+9 queries with meaning on versus 5 without, and in the top five for 17 versus 12.
+Searching with all three (text, look, meaning) takes ~54 ms; indexing reads ~200 images a minute (6,600 in about half an hour, once,
+in the background).
+
+The model is a one-time ~330 MB download (Settings → Search by meaning → **Download**, or
+`glimpse-cli model meaning`) into `%LOCALAPPDATA%\Glimpse\models\embeddinggemma-2-text`, pinned to an exact
+revision of the ONNX export. Glimpse switches its matrix multiplies to int8 compute on first load (the
+export leaves them in float32 mode, which is ~10× slower per query with the same results).
 
 ## Command Palette
 
@@ -170,6 +192,7 @@ Tray → Settings, the gear in the search bar, or **Ctrl+,**. Changes apply imme
 - **Folders**: add (folder picker), remove, rename (the name is what `in:` matches), include subfolders.
   Removing or renaming a folder takes its images out of the index; files are never touched
 - **Visual search**: on/off, model download / remove with progress, GPU on/off
+- **Search by meaning**: on/off, model download / remove with progress
 - **Indexing**: OneDrive online-only files, parallel workers, index stats, Re-index now, Rebuild,
   thumbnail cache size + Clear
 - **About**: version, data folder, log
@@ -202,5 +225,7 @@ MIT, see [LICENSE](LICENSE). Bundled components and their licenses: [THIRD-PARTY
 - [x] GitHub releases: self-contained zip, per-user installer/uninstaller
 - [ ] Code signing (SmartScreen), signed MSIX for the Command Palette extension, auto-update
 - [x] First-run welcome: pick folders, offer the visual model, show the shortcut
+- [x] Search by meaning (EmbeddingGemma 2 text embeddings, int8 on the CPU)
+- [ ] EmbeddingGemma 2 image embeddings (better than CLIP in tests, but ~7 s/image on the CPU; needs a GPU path)
 - [ ] Clipboard-only snips (Win+Shift+S without auto-save)
 - [ ] OCR + embed several GIF frames, not just the first

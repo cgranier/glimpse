@@ -29,7 +29,8 @@ public sealed record IpcHit(
     // The same thumbnail's bytes. Packaged apps (Command Palette) get a virtualized view of AppData and
     // can't read the cache path, so the image travels in the response instead.
     byte[]? ThumbnailPng = null,
-    bool MatchedText = false); // the words matched its text; false = found only by how it looks
+    bool MatchedText = false,  // the words matched its text; false = found only by meaning or how it looks
+    float? MeaningScore = null); // its text means something similar (search by meaning)
 
 public sealed record IpcResponse(bool Ok, string? Error = null, IpcHit[]? Hits = null, bool VisualAvailable = false);
 

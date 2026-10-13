@@ -269,21 +269,23 @@ public sealed partial class MainWindow : Window
         VisualOnly.Visibility = _runtime.VisualAvailable ? Visibility.Visible : Visibility.Collapsed;
         if (!_runtime.VisualAvailable) VisualOnly.IsChecked = false;
 
-        if (result.IndexingChanged || result.VisualChanged) _ = CatchUpIndexAsync();
+        if (result.IndexingChanged || result.VisualChanged || result.MeaningChanged) _ = CatchUpIndexAsync();
         else SetIndexStatus(_indexStatus);
-        if (result.ImagesForgotten > 0 || result.VisualChanged) _ = RunSearchAsync(SearchBox.Text);
+        if (result.ImagesForgotten > 0 || result.VisualChanged || result.MeaningChanged) _ = RunSearchAsync(SearchBox.Text);
     }
 
-    void OnModelDownloaded()
+    void OnModelDownloaded(ModelInfo model)
     {
-        _runtime.ReloadVisual();
-        OnApplied(new GlimpseRuntime.ApplyResult(IndexingChanged: false, VisualChanged: true, HotkeyChanged: false, ImagesForgotten: 0));
+        var meaning = model == ModelCatalog.Meaning;
+        if (meaning) _runtime.ReloadMeaning();
+        else _runtime.ReloadVisual();
+        OnApplied(new GlimpseRuntime.ApplyResult(IndexingChanged: false, VisualChanged: !meaning, HotkeyChanged: false, ImagesForgotten: 0, MeaningChanged: meaning));
     }
 
     async Task RebuildIndexAsync()
     {
         await Task.Run(_runtime.WriteIndex.Clear);
-        _runtime.Engine.InvalidateVisual();
+        _runtime.Engine.InvalidateEmbeddings();
         _items.Clear();
         await CatchUpIndexAsync();
     }
@@ -299,7 +301,7 @@ public sealed partial class MainWindow : Window
 
     bool _indexAgain;
 
-    /// <summary>Text pass, then visual pass. Calls while one is running queue exactly one more run.</summary>
+    /// <summary>Text pass, then visual pass, then meaning pass. Calls while one is running queue exactly one more run.</summary>
     async Task CatchUpIndexAsync()
     {
         if (_indexing)
@@ -319,6 +321,7 @@ public sealed partial class MainWindow : Window
                 var report = await Task.Run(() => indexer.RunAsync(progress: progress));
                 SetIndexStatus(report.Indexed > 0 ? $"indexed {report.Indexed} new" : "up to date");
                 var embedded = await EmbedNewAsync();
+                embedded += await EmbedMeaningAsync();
                 if (report.Indexed > 0 || report.Removed > 0 || embedded > 0) _ = RunSearchAsync(SearchBox.Text);
             }
             while (_indexAgain);
@@ -344,7 +347,7 @@ public sealed partial class MainWindow : Window
             var report = await Task.Run(() => embedder.RunAsync(progress));
             if (report.Embedded + report.Failed > 0)
             {
-                _runtime.Engine.InvalidateVisual();
+                _runtime.Engine.InvalidateEmbeddings();
                 SetIndexStatus($"up to date · visual on {_runtime.Clip?.VisionDevice}");
             }
             return report.Embedded;
@@ -353,6 +356,33 @@ public sealed partial class MainWindow : Window
         {
             App.Log(ex);
             SetIndexStatus("visual indexing failed: " + ex.Message);
+            return 0;
+        }
+    }
+
+    /// <summary>Meaning pass: embed the OCR text of anything new. Returns how many were embedded.</summary>
+    async Task<int> EmbedMeaningAsync()
+    {
+        if (_runtime.MeaningEmbedder is not { } embedder) return 0;
+        var progress = new Progress<IndexProgress>(p => SetIndexStatus($"reading for meaning {p.Done}/{p.Total}"));
+        try
+        {
+            var report = await embedder.RunAsync(progress);
+            if (report.Embedded + report.Failed > 0)
+            {
+                _runtime.Engine.InvalidateEmbeddings();
+                SetIndexStatus("up to date");
+            }
+            return report.Embedded;
+        }
+        catch (OperationCanceledException)
+        {
+            return 0; // switched off or model replaced; the new one (if any) picks up where this left off
+        }
+        catch (Exception ex)
+        {
+            App.Log(ex);
+            SetIndexStatus("meaning indexing failed: " + ex.Message);
             return 0;
         }
     }
@@ -373,7 +403,7 @@ public sealed partial class MainWindow : Window
     {
         var hotkey = _runtime.Config.Hotkey;
         var counts = _stats is { } s
-            ? $"{s.Images:N0} images · {s.WithText:N0} with text · {(_runtime.VisualAvailable ? $"{s.Embedded:N0} visual" : "visual off")} · "
+            ? $"{s.Images:N0} images · {s.WithText:N0} with text · {(_runtime.VisualAvailable ? $"{s.Embedded:N0} visual" : "visual off")}{(_runtime.MeaningAvailable ? $" · {s.MeaningEmbedded:N0} by meaning" : "")} · "
             : "";
         StatusText.Text = counts + _indexStatus +
                           (_hotkey.IsRegistered ? $" · {hotkey} to summon" : $" · hotkey {hotkey} unavailable");

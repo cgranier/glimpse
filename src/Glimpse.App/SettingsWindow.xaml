@@ -183,6 +183,52 @@
                     </Grid>
                 </Border>
 
+                <!-- ============================== Search by meaning ============================== -->
+                <TextBlock Text="Search by meaning" Style="{StaticResource SectionHeader}" />
+
+                <Border Style="{StaticResource Card}">
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <FontIcon Glyph="&#xE8D2;" Style="{StaticResource CardIcon}" />
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                            <TextBlock Text="Search the text in images by what it means" />
+                            <TextBlock Text="“invoice” also finds “receipt” and “factura”; “sign in” finds “log on”. Works across 100+ languages. Runs entirely on this PC."
+                                       Style="{StaticResource CardDescription}" />
+                        </StackPanel>
+                        <ToggleSwitch x:Name="MeaningSwitch" Grid.Column="2" Toggled="OnMeaningToggled"
+                                      OnContent="On" OffContent="Off" MinWidth="0" />
+                    </Grid>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <Grid ColumnSpacing="12" RowSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <FontIcon Glyph="&#xE896;" Style="{StaticResource CardIcon}" />
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                            <TextBlock x:Name="MeaningModelTitle" Text="Model" />
+                            <TextBlock x:Name="MeaningModelStatus" Style="{StaticResource CardDescription}" />
+                            <HyperlinkButton x:Name="MeaningModelSource" Padding="0" FontSize="12" Margin="0,2,0,0" />
+                        </StackPanel>
+                        <Button x:Name="MeaningModelButton" Grid.Column="2" Click="OnMeaningModelButton" VerticalAlignment="Center" MinWidth="120" />
+                        <StackPanel x:Name="MeaningProgressPanel" Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Visibility="Collapsed" Spacing="4">
+                            <ProgressBar x:Name="MeaningProgress" Maximum="1" />
+                            <TextBlock x:Name="MeaningProgressText" Style="{StaticResource CardDescription}" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
                 <!-- ============================== Indexing ============================== -->
                 <TextBlock Text="Indexing" Style="{StaticResource SectionHeader}" />
 

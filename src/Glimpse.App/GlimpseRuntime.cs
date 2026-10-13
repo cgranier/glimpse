@@ -1,11 +1,12 @@
 using Glimpse.Core;
 using Glimpse.Core.Index;
+using Glimpse.Core.Meaning;
 using Glimpse.Core.Visual;
 
 namespace Glimpse.App;
 
 /// <summary>
-/// Everything that depends on the config — indexer, folder watcher, CLIP model, search engine —
+/// Everything that depends on the config — indexer, folder watcher, CLIP and meaning models, search engine —
 /// in one place, so Settings can swap a new config in without restarting the app. Only the parts
 /// affected by a change are rebuilt; the two index connections live for the whole session.
 /// </summary>
@@ -19,6 +20,8 @@ public sealed class GlimpseRuntime : IDisposable
     public Indexer Indexer { get; private set; } = null!;
     public ClipModel? Clip { get; private set; }           // null when visual search is off or not installed
     public EmbeddingIndexer? Embedder { get; private set; }
+    public MeaningModel? Meaning { get; private set; }     // null when search by meaning is off or not installed
+    public MeaningIndexer? MeaningEmbedder { get; private set; }
     public SearchEngine Engine { get; private set; } = null!;
 
     FolderWatcher? _watcher;
@@ -33,16 +36,20 @@ public sealed class GlimpseRuntime : IDisposable
     {
         Config = config;
         BuildIndexing();
-        BuildVisual();
+        BuildModels(visual: true, meaning: true);
     }
 
     public bool VisualAvailable => Clip is not null;
+    public bool MeaningAvailable => Meaning is not null;
 
     /// <summary>Whether the configured model's files are present (visual search may still be switched off).</summary>
     public bool ModelInstalled =>
         Path.Combine(GlimpseConfig.ModelsDir, Config.VisualModel) is var dir && ClipModel.IsInstalled(dir);
 
-    public sealed record ApplyResult(bool IndexingChanged, bool VisualChanged, bool HotkeyChanged, int ImagesForgotten);
+    public bool MeaningModelInstalled =>
+        Path.Combine(GlimpseConfig.ModelsDir, Config.MeaningModel) is var dir && MeaningModel.IsInstalled(dir);
+
+    public sealed record ApplyResult(bool IndexingChanged, bool VisualChanged, bool HotkeyChanged, int ImagesForgotten, bool MeaningChanged = false);
 
     /// <summary>Saves <paramref name="next"/> and rebuilds whatever it changes.</summary>
     public ApplyResult Apply(GlimpseConfig next)
@@ -50,6 +57,7 @@ public sealed class GlimpseRuntime : IDisposable
         var previous = Config;
         var indexing = previous.IndexingDiffers(next);
         var visual = previous.VisualDiffers(next);
+        var meaning = previous.MeaningDiffers(next);
         var hotkey = previous.Hotkey != next.Hotkey;
 
         // Images from folders that are no longer configured (or now point elsewhere) leave the index.
@@ -60,14 +68,16 @@ public sealed class GlimpseRuntime : IDisposable
         Config = next;
         next.Save();
         if (indexing) BuildIndexing();
-        if (visual) BuildVisual();
-        else if (indexing && Clip is not null) Embedder = new EmbeddingIndexer(next, WriteIndex, Clip); // reads Workers; keep the loaded model
-        if (forgotten > 0) Engine.InvalidateVisual();
-        return new ApplyResult(indexing, visual, hotkey, forgotten);
+        if (visual || meaning) BuildModels(visual, meaning);
+        if (!visual && indexing && Clip is not null) Embedder = new EmbeddingIndexer(next, WriteIndex, Clip); // reads Workers; keep the loaded model
+        if (forgotten > 0) Engine.InvalidateEmbeddings();
+        return new ApplyResult(indexing, visual, hotkey, forgotten, meaning);
     }
 
     /// <summary>Re-reads a model that was just downloaded.</summary>
-    public void ReloadVisual() => BuildVisual();
+    public void ReloadVisual() => BuildModels(visual: true, meaning: false);
+
+    public void ReloadMeaning() => BuildModels(visual: false, meaning: true);
 
     void BuildIndexing()
     {
@@ -77,9 +87,17 @@ public sealed class GlimpseRuntime : IDisposable
         _watcher.Indexed += n => NewImagesIndexed?.Invoke(n);
         _watcher.Changed += () =>
         {
-            Engine.InvalidateVisual();
+            Engine.InvalidateEmbeddings();
             ImagesChanged?.Invoke();
         };
+    }
+
+    /// <summary>(Re)loads the models whose settings changed, then the search engine that uses them.</summary>
+    void BuildModels(bool visual, bool meaning)
+    {
+        if (visual) BuildVisual();
+        if (meaning) BuildMeaning();
+        Engine = new SearchEngine(SearchIndex, Clip, Meaning);
     }
 
     void BuildVisual()
@@ -99,7 +117,6 @@ public sealed class GlimpseRuntime : IDisposable
             Clip = null;
             Embedder = null;
         }
-        Engine = new SearchEngine(SearchIndex, Clip);
 
         // A pass or a search may still be using the old model; let them finish before releasing it.
         if (oldClip is not null)
@@ -113,11 +130,41 @@ public sealed class GlimpseRuntime : IDisposable
         }
     }
 
+    void BuildMeaning()
+    {
+        var (oldMeaning, oldEmbedder) = (Meaning, MeaningEmbedder);
+
+        if (Config.MeaningModelPath is { } dir && MeaningModel.IsInstalled(dir))
+        {
+            Meaning = new MeaningModel(dir);
+            MeaningEmbedder = new MeaningIndexer(WriteIndex, Meaning);
+            var meaning = Meaning;
+            _ = Task.Run(() => meaning.EmbedQuery("warm up"));
+        }
+        else
+        {
+            Meaning = null;
+            MeaningEmbedder = null;
+        }
+
+        if (oldMeaning is not null)
+        {
+            oldEmbedder?.Stop();
+            _ = Task.Run(async () =>
+            {
+                if (oldEmbedder is not null) await oldEmbedder.WhenIdleAsync();
+                await Task.Delay(TimeSpan.FromSeconds(5));
+                oldMeaning.Dispose();
+            });
+        }
+    }
+
     public void Dispose()
     {
         _watcher?.Dispose();
         SearchIndex.Dispose();
         WriteIndex.Dispose();
         Clip?.Dispose();
+        Meaning?.Dispose();
     }
 }

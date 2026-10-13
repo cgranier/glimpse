@@ -26,12 +26,14 @@ Command Palette extension zip, additionally:
 
 ## Downloaded on request (not bundled)
 
-Settings → Visual search → Download fetches, from Hugging Face:
+Settings → Visual search → Download and Settings → Search by meaning → Download fetch, from Hugging Face:
 
 | Component | License |
 |---|---|
 | CLIP ViT-B/16 model weights (OpenAI) | MIT — https://github.com/openai/CLIP/blob/main/LICENSE |
 | ONNX export by Xenova | https://huggingface.co/Xenova/clip-vit-base-patch16 |
+| EmbeddingGemma 2 model weights (Google) | Apache 2.0 — https://huggingface.co/google/embeddinggemma-2 |
+| ONNX export by onnx-community | https://huggingface.co/onnx-community/embeddinggemma-2-ONNX |
 
 ## Used, not distributed
 

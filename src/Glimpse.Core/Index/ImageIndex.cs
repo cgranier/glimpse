@@ -23,9 +23,14 @@ public sealed record SearchHit(
     /// <summary>Cosine similarity for visual matches; null for text matches.</summary>
     float? VisualScore = null,
     /// <summary>The search words (or file name) matched this image's text. False for purely visual matches.</summary>
-    bool MatchedText = false);
+    bool MatchedText = false,
+    /// <summary>Cosine similarity between the query's meaning and the image's text, when search by meaning found it.</summary>
+    float? MeaningScore = null);
 
-public sealed record IndexStats(int Images, int WithText, int Errors, IReadOnlyDictionary<string, int> BySource, int Embedded = 0);
+public sealed record IndexStats(int Images, int WithText, int Errors, IReadOnlyDictionary<string, int> BySource, int Embedded = 0, int MeaningEmbedded = 0);
+
+/// <summary>Which embeddings: CLIP image vectors (visual search) or EmbeddingGemma text vectors (search by meaning).</summary>
+public enum VectorKind { Visual, Meaning }
 
 /// <summary>All embeddings for one model, plus the metadata visual search filters on.</summary>
 public sealed record EmbeddingSet(long[] Ids, string[] Sources, long[] Mtimes, float[] Vectors, int Dim)
@@ -43,7 +48,7 @@ public sealed class ImageIndex : IDisposable
     public const char MatchStart = '\u0001';
     public const char MatchEnd = '\u0002';
 
-    const int SchemaVersion = 3;
+    const int SchemaVersion = 4;
     const int SQLITE_CORRUPT = 11, SQLITE_NOTADB = 26;
 
     // A SqliteConnection must never be used by two threads at once (the app's startup scan and folder
@@ -127,6 +132,14 @@ public sealed class ImageIndex : IDisposable
             -- v3: lets GetStats count real embeddings from the index instead of reading every vector.
             CREATE INDEX IF NOT EXISTS embeddings_ok ON embeddings(image_id) WHERE length(vec) > 0;
             CREATE INDEX IF NOT EXISTS images_status ON images(status);
+
+            -- v4: "meaning" embeddings of each image's OCR text (EmbeddingGemma 2). Same layout as embeddings.
+            CREATE TABLE IF NOT EXISTS text_embeddings (
+                image_id    INTEGER PRIMARY KEY,
+                model       TEXT NOT NULL,
+                vec         BLOB NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS text_embeddings_ok ON text_embeddings(image_id) WHERE length(vec) > 0;
             """);
         Exec(db, $"PRAGMA user_version = {SchemaVersion}");
     }
@@ -152,7 +165,7 @@ public sealed class ImageIndex : IDisposable
             foreach (var id in ids)
             {
                 using var cmd = _db.CreateCommand();
-                cmd.CommandText = "DELETE FROM images_fts WHERE rowid = $id; DELETE FROM embeddings WHERE image_id = $id; DELETE FROM images WHERE id = $id;";
+                cmd.CommandText = "DELETE FROM images_fts WHERE rowid = $id; DELETE FROM embeddings WHERE image_id = $id; DELETE FROM text_embeddings WHERE image_id = $id; DELETE FROM images WHERE id = $id;";
                 cmd.Parameters.AddWithValue("$id", id);
                 cmd.ExecuteNonQuery();
             }
@@ -188,6 +201,7 @@ public sealed class ImageIndex : IDisposable
         // The file changed (or is new), so any embedding is stale too.
         fts.CommandText = """
             DELETE FROM embeddings WHERE image_id = $id;
+            DELETE FROM text_embeddings WHERE image_id = $id;
             DELETE FROM images_fts WHERE rowid = $id;
             INSERT INTO images_fts (rowid, text, name) VALUES ($id, $text, $name);
             """;
@@ -267,6 +281,7 @@ public sealed class ImageIndex : IDisposable
                 WHERE path = $path OR lower(substr(path, 1, length($prefix))) = lower($prefix);
             DELETE FROM images_fts WHERE rowid IN (SELECT id FROM doomed);
             DELETE FROM embeddings WHERE image_id IN (SELECT id FROM doomed);
+            DELETE FROM text_embeddings WHERE image_id IN (SELECT id FROM doomed);
             DELETE FROM images WHERE id IN (SELECT id FROM doomed);
             """;
         cmd.Parameters.AddWithValue("$path", path);
@@ -285,10 +300,12 @@ public sealed class ImageIndex : IDisposable
             cmd.CommandText = """
                 DELETE FROM images_fts WHERE rowid IN (SELECT id FROM images WHERE source = $source);
                 DELETE FROM embeddings WHERE image_id IN (SELECT id FROM images WHERE source = $source);
+                DELETE FROM text_embeddings WHERE image_id IN (SELECT id FROM images WHERE source = $source);
                 DELETE FROM images WHERE source = $source;
                 """;
             cmd.Parameters.AddWithValue("$source", source);
-            var removed = cmd.ExecuteNonQuery();
+            cmd.ExecuteNonQuery();
+            var removed = Convert.ToInt32(Scalar(_db, "SELECT changes()")); // images only, not the other tables' rows
             tx.Commit();
             return removed;
         }
@@ -300,7 +317,7 @@ public sealed class ImageIndex : IDisposable
         lock (_gate)
         {
             using var tx = _db.BeginTransaction();
-            Exec(_db, "DELETE FROM images_fts; DELETE FROM embeddings; DELETE FROM images;");
+            Exec(_db, "DELETE FROM images_fts; DELETE FROM embeddings; DELETE FROM text_embeddings; DELETE FROM images;");
             tx.Commit();
             Exec(_db, "VACUUM;");
         }
@@ -418,6 +435,43 @@ public sealed class ImageIndex : IDisposable
 
     // ---- embeddings -----------------------------------------------------------------------
 
+    static string Table(VectorKind kind) => kind == VectorKind.Meaning ? "text_embeddings" : "embeddings";
+
+    /// <summary>Images with OCR text but no meaning embedding from <paramref name="model"/> yet, newest first.</summary>
+    public List<long> GetImagesMissingMeaning(string model)
+    {
+        lock (_gate)
+        {
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = """
+                SELECT images.id FROM images
+                JOIN images_fts ON images_fts.rowid = images.id
+                LEFT JOIN text_embeddings ON text_embeddings.image_id = images.id AND text_embeddings.model = $model
+                WHERE text_embeddings.image_id IS NULL AND images.status = 'ok' AND length(images_fts.text) > 0
+                ORDER BY images.mtime DESC
+                """;
+            cmd.Parameters.AddWithValue("$model", model);
+            using var r = cmd.ExecuteReader();
+            var result = new List<long>();
+            while (r.Read()) result.Add(r.GetInt64(0));
+            return result;
+        }
+    }
+
+    /// <summary>OCR text for several images at once.</summary>
+    public Dictionary<long, string> GetTexts(IEnumerable<long> ids)
+    {
+        lock (_gate)
+        {
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = $"SELECT rowid, text FROM images_fts WHERE rowid IN ({string.Join(',', ids)})";
+            using var r = cmd.ExecuteReader();
+            var result = new Dictionary<long, string>();
+            while (r.Read()) result[r.GetInt64(0)] = r.IsDBNull(1) ? "" : r.GetString(1);
+            return result;
+        }
+    }
+
     /// <summary>Images that decoded fine for OCR but have no embedding from <paramref name="model"/> yet, newest first.</summary>
     public List<(long Id, string Path)> GetImagesMissingEmbedding(string model)
     {
@@ -439,13 +493,13 @@ public sealed class ImageIndex : IDisposable
     }
 
     /// <summary>Stores embeddings; a null vector records a failed attempt so it isn't retried every run.</summary>
-    public void SaveEmbeddings(string model, IEnumerable<(long Id, float[]? Vector)> items)
+    public void SaveEmbeddings(string model, IEnumerable<(long Id, float[]? Vector)> items, VectorKind kind = VectorKind.Visual)
     {
         lock (_gate)
         {
             using var tx = _db.BeginTransaction();
             using var cmd = _db.CreateCommand();
-            cmd.CommandText = "INSERT OR REPLACE INTO embeddings (image_id, model, vec) VALUES ($id, $model, $vec)";
+            cmd.CommandText = $"INSERT OR REPLACE INTO {Table(kind)} (image_id, model, vec) VALUES ($id, $model, $vec)";
             var id = cmd.Parameters.Add("$id", SqliteType.Integer);
             cmd.Parameters.AddWithValue("$model", model);
             var vec = cmd.Parameters.Add("$vec", SqliteType.Blob);
@@ -459,15 +513,15 @@ public sealed class ImageIndex : IDisposable
         }
     }
 
-    public EmbeddingSet LoadEmbeddings(string model)
+    public EmbeddingSet LoadEmbeddings(string model, VectorKind kind = VectorKind.Visual)
     {
         lock (_gate)
         {
             using var cmd = _db.CreateCommand();
-            cmd.CommandText = """
-                SELECT images.id, images.source, images.mtime, embeddings.vec FROM embeddings
-                JOIN images ON images.id = embeddings.image_id
-                WHERE embeddings.model = $model AND length(embeddings.vec) > 0
+            cmd.CommandText = $"""
+                SELECT images.id, images.source, images.mtime, e.vec FROM {Table(kind)} e
+                JOIN images ON images.id = e.image_id
+                WHERE e.model = $model AND length(e.vec) > 0
                 """;
             cmd.Parameters.AddWithValue("$model", model);
             using var r = cmd.ExecuteReader();
@@ -531,7 +585,8 @@ public sealed class ImageIndex : IDisposable
                 Convert.ToInt32(Scalar(_db, "SELECT count(*) FROM images_fts WHERE length(text) > 0")),
                 Convert.ToInt32(Scalar(_db, "SELECT count(*) FROM images WHERE status = 'error'")),
                 bySource,
-                Convert.ToInt32(Scalar(_db, "SELECT count(*) FROM embeddings WHERE length(vec) > 0")));
+                Convert.ToInt32(Scalar(_db, "SELECT count(*) FROM embeddings WHERE length(vec) > 0")),
+                Convert.ToInt32(Scalar(_db, "SELECT count(*) FROM text_embeddings WHERE length(vec) > 0")));
         }
     }
 

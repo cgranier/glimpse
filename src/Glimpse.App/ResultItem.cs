@@ -15,14 +15,16 @@ public sealed class ResultItem(SearchHit hit, bool visualSearch) : INotifyProper
     public string Badge { get; } = BadgeFor(hit, visualSearch);
 
     /// <summary>
-    /// Visual searches show the similarity score on every result. In a normal search, only results found
-    /// purely by how they look get a plain "≈ looks like", explaining why they're there without your words;
-    /// text matches get nothing.
+    /// Visual searches show the similarity score on every result. In a normal search, results found without
+    /// your words say why they're there: "≈ related text" (its text means something similar) or "≈ looks like"
+    /// (found by how it looks); text matches get nothing.
     /// </summary>
-    static string BadgeFor(SearchHit hit, bool visualSearch) => hit.VisualScore switch
+    static string BadgeFor(SearchHit hit, bool visualSearch) => hit switch
     {
-        float s when visualSearch => $"≈ {s:F2}",
-        not null when !hit.MatchedText => "≈ looks like",
+        { VisualScore: float s } when visualSearch => $"≈ {s:F2}",
+        { MatchedText: true } => "",
+        { MeaningScore: not null } => "≈ related text",
+        { VisualScore: not null } => "≈ looks like",
         _ => "",
     };
 

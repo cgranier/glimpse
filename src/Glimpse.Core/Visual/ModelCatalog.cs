@@ -7,8 +7,9 @@ public sealed record ModelFile(string RemotePath, long Size)
     public string LocalName => Path.GetFileName(RemotePath);
 }
 
-/// <summary>A downloadable CLIP model: where it comes from, what it weighs, and its license.</summary>
-public sealed record ModelInfo(string Name, string DisplayName, string Repository, string License, IReadOnlyList<ModelFile> Files)
+/// <summary>A downloadable model: where it comes from, what it weighs, and its license.</summary>
+/// <param name="Revision">Branch or commit to download; a commit pins the exact files the sizes below describe.</param>
+public sealed record ModelInfo(string Name, string DisplayName, string Repository, string License, IReadOnlyList<ModelFile> Files, string Revision = "main")
 {
     public long TotalSize => Files.Sum(f => f.Size);
     public string SourceUrl => $"https://huggingface.co/{Repository}";
@@ -28,6 +29,22 @@ public static class ModelCatalog
             new("onnx/text_model_quantized.onnx", 64_504_507),
             new("onnx/vision_model.onnx", 345_060_583),
         ]);
+
+    /// <summary>
+    /// Google's EmbeddingGemma 2, text part only (int8, CPU), ONNX export by onnx-community: search OCR text by
+    /// meaning, in 100+ languages. Pinned to a commit, since the repository is still being updated.
+    /// </summary>
+    public static ModelInfo Meaning { get; } = new(
+        "embeddinggemma-2-text",
+        "EmbeddingGemma 2 (text)",
+        "onnx-community/embeddinggemma-2-ONNX",
+        "Apache 2.0 (Google)",
+        [
+            new("tokenizer.json", 32_170_510),
+            new("onnx/model_quantized.onnx", 495_165),
+            new("onnx/model_quantized.onnx_data", 313_724_928),
+        ],
+        Revision: "daa72c51243991dfcaf9f9137d2c573d8f7790c0");
 
     public static bool IsInstalled(ModelInfo model, string dir) =>
         model.Files.All(f => new FileInfo(Path.Combine(dir, f.LocalName)) is { Exists: true } fi && fi.Length == f.Size);
@@ -55,7 +72,7 @@ public static class ModelCatalog
             }
 
             var partial = target + ".partial";
-            var url = $"https://huggingface.co/{model.Repository}/resolve/main/{file.RemotePath}";
+            var url = $"https://huggingface.co/{model.Repository}/resolve/{model.Revision}/{file.RemotePath}";
             using (var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct))
             {
                 response.EnsureSuccessStatusCode();
