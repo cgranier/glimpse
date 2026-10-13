@@ -51,16 +51,14 @@ public sealed partial class WelcomeWindow : Window
         DownloadModel.IsEnabled = !installed;
         DownloadModel.Content = installed ? "Visual search model already installed" : $"Download the visual search model now ({model.TotalSize >> 20} MB)";
         DownloadModel.IsChecked = installed;
-        ModelHint.Text = "Search by what images look like (“network diagram”, “bar chart”) and find similar images. " +
-                         "Indexes in minutes, faster with a graphics card.";
+        ModelHint.Text = "Find images by how they look (“network diagram”, “bar chart”), and similar images.";
 
         var meaning = ModelCatalog.Meaning;
         var meaningInstalled = ModelCatalog.IsInstalled(meaning, Path.Combine(GlimpseConfig.ModelsDir, meaning.Name));
         DownloadMeaning.IsEnabled = !meaningInstalled;
         DownloadMeaning.Content = meaningInstalled ? "Search-by-meaning model already installed" : $"Download the search-by-meaning model now ({meaning.TotalSize >> 20} MB)";
         DownloadMeaning.IsChecked = meaningInstalled;
-        MeaningHint.Text = "Search the text in images by what it means, in 100+ languages: “invoice” also finds “factura”. " +
-                           "The first pass reads about 200 images a minute in the background.";
+        MeaningHint.Text = "Find text by what it means, in 100+ languages: “invoice” also finds “factura”.";
 
         if (!hotkeyWorks && FallbackHotkeys.FirstOrDefault(GlobalHotkey.IsAvailable) is { } free)
         {
